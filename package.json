@@ -1,0 +1,20 @@
+{
+  "name": "leave-management-app",
+  "version": "1.0.0",
+  "description": "Leave management app with a secure admin approval panel.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "mysql2": "^3.11.0",
+    "nodemailer": "^6.9.13"
+  }
+}
