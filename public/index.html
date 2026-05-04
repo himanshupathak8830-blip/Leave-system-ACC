@@ -40,14 +40,14 @@ h2 {
 .logo-wrap {
     display: flex;
     justify-content: center;
-    margin-bottom: 18px;
+    margin-bottom: 10px;
 }
 
 .company-logo {
     display: block;
-    width: min(100%, 480px);
+    width: min(100%, 360px);
     height: auto;
-    max-height: 260px;
+    max-height: 150px;
     object-fit: contain;
 }
 
@@ -119,23 +119,6 @@ button:disabled {
     cursor: not-allowed;
 }
 
-.secondary-button {
-    margin-top: 0;
-    margin-bottom: 12px;
-    background: white;
-    color: #111827;
-}
-
-.secondary-button:hover {
-    background: #f3f4f6;
-}
-
-.otp-box input {
-    text-align: center;
-    letter-spacing: 4px;
-    font-weight: 700;
-}
-
 .email-status {
     min-height: 18px;
     margin: -4px 0 10px;
@@ -164,10 +147,6 @@ button:disabled {
     color: #7f1d1d;
 }
 
-.hidden {
-    display: none;
-}
-
 .message {
     min-height: 20px;
     margin-top: 12px;
@@ -187,7 +166,7 @@ button:disabled {
 
     <form id="form" novalidate>
         <input name="name" placeholder="Full Name" required>
-        <input name="employeeId" placeholder="Employee ID" required>
+        <input id="employeeId" name="employeeId" placeholder="Employee ID (ACC...)" pattern="^ACC.*" title="Employee ID must start with ACC" required>
 
         <label for="startDate">Start Date</label>
         <input id="startDate" type="date" name="startDate" required>
@@ -203,13 +182,7 @@ button:disabled {
         </select>
 
         <textarea name="reason" placeholder="Reason for leave" required></textarea>
-        <input id="studentEmail" type="text" name="email" placeholder="Email" inputmode="email" autocomplete="email" required>
-        <input id="emailVerificationToken" type="hidden" name="emailVerificationToken">
-        <button id="sendOtpBtn" class="secondary-button" type="button">Verify Email</button>
-        <div id="otpBox" class="otp-box hidden">
-            <input id="emailOtp" type="text" inputmode="numeric" maxlength="6" placeholder="Enter OTP">
-            <button id="verifyOtpBtn" class="secondary-button" type="button">Verify Code</button>
-        </div>
+        <input id="studentEmail" type="email" name="email" placeholder="Email" inputmode="email" autocomplete="email" required>
         <div id="emailStatus" class="email-status"></div>
 
         <button id="submitBtn" type="submit">Apply Leave</button>
@@ -222,56 +195,52 @@ const API_BASE = location.protocol === "file:" ? "http://localhost:3000" : "";
 const form = document.getElementById("form");
 const submitBtn = document.getElementById("submitBtn");
 const message = document.getElementById("message");
+const employeeIdInput = document.getElementById("employeeId");
 const studentEmail = document.getElementById("studentEmail");
-const sendOtpBtn = document.getElementById("sendOtpBtn");
-const otpBox = document.getElementById("otpBox");
-const emailOtp = document.getElementById("emailOtp");
-const verifyOtpBtn = document.getElementById("verifyOtpBtn");
 const emailStatus = document.getElementById("emailStatus");
-const emailVerificationTokenInput = document.getElementById("emailVerificationToken");
-const EMAIL_REQUEST_TIMEOUT_MS = 25000;
+const ALLOWED_EMAIL_DOMAINS = ["gmail.com", "outlook.com", "yahoo.com"];
 
-let verifiedEmail = "";
-let emailVerificationToken = "";
-
-updateSubmitState();
+employeeIdInput.addEventListener("input", syncEmployeeIdValidity);
+employeeIdInput.addEventListener("blur", () => {
+    syncEmployeeIdValidity();
+    if (employeeIdInput.value.trim() && employeeIdInput.validationMessage) {
+        alert(employeeIdInput.validationMessage);
+        employeeIdInput.focus();
+    }
+});
 
 studentEmail.addEventListener("blur", () => {
-    const emailError = getEmailError(studentEmail.value);
-    if (studentEmail.value.trim() && emailError) {
-        alert(emailError);
+    syncEmailValidity();
+    if (studentEmail.value.trim() && studentEmail.validationMessage) {
+        alert(studentEmail.validationMessage);
         studentEmail.focus();
     }
 });
 
-studentEmail.addEventListener("input", resetEmailVerification);
-sendOtpBtn.addEventListener("click", sendEmailOtp);
-verifyOtpBtn.addEventListener("click", verifyEmailOtp);
+studentEmail.addEventListener("input", () => {
+    syncEmailValidity();
+    if (!studentEmail.value.trim() || studentEmail.validationMessage) {
+        setEmailStatus("", "");
+        return;
+    }
+
+    setEmailStatus("Email format looks good.", "success");
+});
 
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const data = Object.fromEntries(new FormData(form));
+    data.employeeId = String(data.employeeId || "").trim();
+    data.email = normalizeEmail(data.email);
 
+    syncEmployeeIdValidity();
+    syncEmailValidity();
     if (!form.checkValidity()) {
         form.reportValidity();
         return;
     }
 
-    const emailError = getEmailError(data.email);
-    if (emailError) {
-        alert(emailError);
-        studentEmail.focus();
-        return;
-    }
-
-    if (!emailVerificationToken || verifiedEmail !== normalizeEmail(data.email)) {
-        alert("Please verify your email before applying leave.");
-        studentEmail.focus();
-        return;
-    }
-
-    data.emailVerificationToken = emailVerificationToken;
     submitBtn.disabled = true;
     submitBtn.textContent = "Submitting...";
     message.textContent = "";
@@ -287,167 +256,38 @@ form.addEventListener("submit", async (event) => {
 
         if (!res.ok) {
             message.textContent = text || "Leave submit nahi hua. Server check karo.";
-            if ((text || "").toLowerCase().includes("verify")) {
-                resetEmailVerification();
-            }
             return;
         }
 
         message.textContent = text || "Leave Applied Successfully";
         form.reset();
-        resetEmailVerification();
+        syncEmployeeIdValidity();
+        syncEmailValidity();
+        setEmailStatus("", "");
     } catch (err) {
         message.textContent = "Server connect nahi ho raha. http://localhost:3000 se page open karo.";
     } finally {
-        updateSubmitState();
+        submitBtn.disabled = false;
         submitBtn.textContent = "Apply Leave";
     }
 });
 
-async function sendEmailOtp() {
+function syncEmployeeIdValidity() {
+    employeeIdInput.setCustomValidity(getEmployeeIdError(employeeIdInput.value));
+}
+
+function syncEmailValidity() {
     const emailError = getEmailError(studentEmail.value);
+    studentEmail.setCustomValidity(emailError);
 
-    if (emailError) {
-        alert(emailError);
-        studentEmail.focus();
-        return;
+    if (emailError && studentEmail.value.trim()) {
+        setEmailStatus(emailError, "error");
     }
-
-    resetEmailVerification();
-    sendOtpBtn.disabled = true;
-    sendOtpBtn.textContent = "Sending...";
-    setEmailStatus("Sending verification code...", "info");
-
-    try {
-        const data = Object.fromEntries(new FormData(form));
-        const { res, result } = await fetchJsonWithTimeout(API_BASE + "/send-email-otp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                email: studentEmail.value,
-                name: data.name
-            })
-        });
-
-        if (!res.ok || !result.success) {
-            setEmailStatus(result.message || "Verification code send nahi hua.", "error");
-            return;
-        }
-
-        otpBox.classList.remove("hidden");
-        emailOtp.value = "";
-        emailOtp.focus();
-        setEmailStatus(result.message || "Verification code sent to your email.", "info");
-    } catch (err) {
-        setEmailStatus(getRequestErrorMessage(err), "error");
-    } finally {
-        sendOtpBtn.disabled = false;
-        sendOtpBtn.textContent = "Resend Code";
-    }
-}
-
-async function verifyEmailOtp() {
-    const emailError = getEmailError(studentEmail.value);
-    const otp = emailOtp.value.trim();
-
-    if (emailError) {
-        alert(emailError);
-        studentEmail.focus();
-        return;
-    }
-
-    if (!/^\d{6}$/.test(otp)) {
-        alert("Please enter the 6-digit verification code.");
-        emailOtp.focus();
-        return;
-    }
-
-    verifyOtpBtn.disabled = true;
-    verifyOtpBtn.textContent = "Verifying...";
-    setEmailStatus("Verifying code...", "info");
-
-    try {
-        const { res, result } = await fetchJsonWithTimeout(API_BASE + "/verify-email-otp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                email: studentEmail.value,
-                otp
-            })
-        });
-
-        if (!res.ok || !result.success || !result.token) {
-            setEmailStatus(result.message || "Verification failed.", "error");
-            return;
-        }
-
-        verifiedEmail = normalizeEmail(studentEmail.value);
-        emailVerificationToken = result.token;
-        emailVerificationTokenInput.value = result.token;
-        otpBox.classList.add("hidden");
-        sendOtpBtn.disabled = true;
-        sendOtpBtn.textContent = "Email Verified";
-        setEmailStatus(result.message || "Email verified.", "success");
-        updateSubmitState();
-    } catch (err) {
-        setEmailStatus(getRequestErrorMessage(err), "error");
-    } finally {
-        verifyOtpBtn.disabled = false;
-        verifyOtpBtn.textContent = "Verify Code";
-    }
-}
-
-function resetEmailVerification() {
-    verifiedEmail = "";
-    emailVerificationToken = "";
-    emailVerificationTokenInput.value = "";
-    otpBox.classList.add("hidden");
-    emailOtp.value = "";
-    sendOtpBtn.disabled = false;
-    sendOtpBtn.textContent = "Verify Email";
-    setEmailStatus("", "");
-    updateSubmitState();
-}
-
-function updateSubmitState() {
-    submitBtn.disabled = !emailVerificationToken;
 }
 
 function setEmailStatus(text, type) {
     emailStatus.textContent = text;
     emailStatus.className = type ? `email-status ${type}` : "email-status";
-}
-
-async function fetchJsonWithTimeout(url, options) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), EMAIL_REQUEST_TIMEOUT_MS);
-
-    try {
-        const res = await fetch(url, {
-            ...options,
-            signal: controller.signal
-        });
-        const text = await res.text();
-        let result = {};
-
-        try {
-            result = text ? JSON.parse(text) : {};
-        } catch (err) {
-            result = { message: text };
-        }
-
-        return { res, result };
-    } finally {
-        window.clearTimeout(timeoutId);
-    }
-}
-
-function getRequestErrorMessage(err) {
-    if (err?.name === "AbortError") {
-        return "Email service response nahi de rahi. Railway EMAIL_USER/EMAIL_PASS aur Gmail App Password check karo.";
-    }
-
-    return "Server connect nahi ho raha.";
 }
 
 function normalizeEmail(email) {
@@ -467,6 +307,63 @@ function getEmailError(email) {
 
     if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmedEmail)) {
         return "Please enter a valid email address. Example: student@gmail.com";
+    }
+
+    const [localPart, domain] = trimmedEmail.split("@");
+    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+        const suggestedDomain = getClosestAllowedEmailDomain(domain);
+
+        if (suggestedDomain) {
+            return `Please check the email domain spelling. Did you mean ${localPart}@${suggestedDomain}?`;
+        }
+
+        return "Please use only @gmail.com, @outlook.com, or @yahoo.com email addresses.";
+    }
+
+    return "";
+}
+
+function getClosestAllowedEmailDomain(domain) {
+    const distances = ALLOWED_EMAIL_DOMAINS
+        .map((allowedDomain) => ({
+            domain: allowedDomain,
+            distance: getEditDistance(domain, allowedDomain)
+        }))
+        .sort((left, right) => left.distance - right.distance);
+
+    const bestMatch = distances[0];
+    return bestMatch && bestMatch.distance <= 2 ? bestMatch.domain : "";
+}
+
+function getEditDistance(left, right) {
+    const rows = Array.from({ length: left.length + 1 }, () => []);
+
+    for (let i = 0; i <= left.length; i += 1) rows[i][0] = i;
+    for (let j = 0; j <= right.length; j += 1) rows[0][j] = j;
+
+    for (let i = 1; i <= left.length; i += 1) {
+        for (let j = 1; j <= right.length; j += 1) {
+            const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+            rows[i][j] = Math.min(
+                rows[i - 1][j] + 1,
+                rows[i][j - 1] + 1,
+                rows[i - 1][j - 1] + cost
+            );
+        }
+    }
+
+    return rows[left.length][right.length];
+}
+
+function getEmployeeIdError(employeeId) {
+    const trimmedEmployeeId = String(employeeId || "").trim();
+
+    if (!trimmedEmployeeId) {
+        return "Please enter your Employee ID.";
+    }
+
+    if (!trimmedEmployeeId.startsWith("ACC")) {
+        return "Employee ID must start with ACC.";
     }
 
     return "";

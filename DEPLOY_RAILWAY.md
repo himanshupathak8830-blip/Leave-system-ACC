@@ -51,7 +51,7 @@ If the app logs `Startup error: connect ECONNREFUSED ::1:3306`, the app service 
 
 ## 4. Email Variables
 
-For student OTP verification and approval/rejection emails, add:
+For leave submission and approval/rejection notification emails, add:
 
 ```env
 EMAIL_SERVICE=gmail
@@ -63,12 +63,10 @@ HR_NAME=Faizah Waseem
 HR_DEPARTMENT=HR Department
 COMPANY_NAME=Analytics Career Connect
 COMPANY_LOGO_URL=https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800
-EMAIL_OTP_TTL_MINUTES=10
-EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=30
 EMAIL_SEND_TIMEOUT_MS=20000
 ```
 
-For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. If OTP stays on "Sending", open Railway logs and look for `Email OTP send error`.
+For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. Notification emails are queued and sent 2 minutes after each leave submission, approval, or rejection.
 
 ## 5. Deploy
 

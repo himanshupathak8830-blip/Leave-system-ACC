@@ -18,14 +18,12 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const DEFAULT_COMPANY_LOGO_URL = "https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800";
 const LEAVE_RETENTION_DAYS = Math.max(1, Number.parseInt(process.env.LEAVE_RETENTION_DAYS || "7", 10) || 7);
 const LEAVE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const EMAIL_OTP_TTL_MINUTES = Math.max(1, Number.parseInt(process.env.EMAIL_OTP_TTL_MINUTES || "10", 10) || 10);
-const EMAIL_VERIFICATION_TOKEN_TTL_MINUTES = Math.max(
-    1,
-    Number.parseInt(process.env.EMAIL_VERIFICATION_TOKEN_TTL_MINUTES || "30", 10) || 30
-);
+const EMAIL_SEND_DELAY_MS = 2 * 60 * 1000;
+const EMAIL_JOB_POLL_INTERVAL_MS = 30 * 1000;
+const EMAIL_JOB_RETRY_DELAY_MS = 5 * 60 * 1000;
+const EMAIL_JOB_MAX_ATTEMPTS = 3;
 const EMAIL_SEND_TIMEOUT_MS = Math.max(5000, Number.parseInt(process.env.EMAIL_SEND_TIMEOUT_MS || "20000", 10) || 20000);
-const EMAIL_OTP_RESEND_SECONDS = 60;
-const EMAIL_OTP_MAX_ATTEMPTS = 5;
+const ALLOWED_EMAIL_DOMAINS = ["gmail.com", "outlook.com", "yahoo.com"];
 
 app.disable("x-powered-by");
 
@@ -133,24 +131,26 @@ async function initializeDatabase() {
     `);
 
     await db.execute(`
-        CREATE TABLE IF NOT EXISTS email_verifications (
+        CREATE TABLE IF NOT EXISTS email_jobs (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            email VARCHAR(100) NOT NULL,
-            otpHash VARCHAR(128) NOT NULL,
-            expiresAt DATETIME NOT NULL,
-            verifiedAt DATETIME NULL,
+            type VARCHAR(50) NOT NULL,
+            payload LONGTEXT NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'Pending',
             attempts INT NOT NULL DEFAULT 0,
+            runAt DATETIME NOT NULL,
+            lastError TEXT NULL,
             createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            INDEX email_created_idx (email, createdAt),
-            INDEX expires_idx (expiresAt)
+            updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX status_run_idx (status, runAt)
         )
     `);
 
     await db.execute("ALTER TABLE admin MODIFY password VARCHAR(255) NOT NULL");
     await db.execute("ALTER TABLE leaves MODIFY status VARCHAR(20) DEFAULT 'Pending'");
     await ensureLeaveCreatedAtColumn();
+    await removeLegacyEmailVerificationTable();
     await cleanupExpiredLeaves();
-    await cleanupEmailVerifications();
+    await cleanupOldEmailJobs();
     await createDefaultAdmin();
 }
 
@@ -171,11 +171,19 @@ async function cleanupExpiredLeaves() {
     }
 }
 
-async function cleanupEmailVerifications() {
+async function removeLegacyEmailVerificationTable() {
+    try {
+        await db.execute("DROP TABLE IF EXISTS email_verifications");
+    } catch (err) {
+        console.log("Legacy email verification table cleanup skipped:", err.message);
+    }
+}
+
+async function cleanupOldEmailJobs() {
     await db.execute(`
-        DELETE FROM email_verifications
-        WHERE expiresAt < DATE_SUB(NOW(), INTERVAL 1 DAY)
-           OR verifiedAt < DATE_SUB(NOW(), INTERVAL 1 DAY)
+        DELETE FROM email_jobs
+        WHERE status IN ('Sent', 'Failed')
+          AND updatedAt < DATE_SUB(NOW(), INTERVAL 14 DAY)
     `);
 }
 
@@ -242,14 +250,6 @@ function createToken(email) {
     });
 }
 
-function createEmailVerificationToken(email) {
-    return createSignedToken({
-        email: normalizeEmail(email),
-        purpose: "emailVerification",
-        exp: Date.now() + EMAIL_VERIFICATION_TOKEN_TTL_MINUTES * 60 * 1000
-    });
-}
-
 function verifyToken(token, purpose) {
     const [body, signature] = String(token || "").split(".");
     if (!body || !signature) return null;
@@ -265,11 +265,6 @@ function verifyToken(token, purpose) {
     } catch (err) {
         return null;
     }
-}
-
-function verifyEmailVerificationToken(token, email) {
-    const payload = verifyToken(token, "emailVerification");
-    return Boolean(payload && normalizeEmail(payload.email) === normalizeEmail(email));
 }
 
 function signTokenBody(body) {
@@ -363,36 +358,6 @@ function getEmailFromAddress() {
     return envValue("EMAIL_FROM", "SMTP_FROM", "MAIL_FROM") || envValue("EMAIL_USER", "SMTP_USER", "MAIL_USER");
 }
 
-function getEmailSendErrorMessage(err) {
-    const code = String(err?.code || "").toUpperCase();
-    const text = `${code} ${err?.responseCode || ""} ${err?.message || ""}`.toLowerCase();
-
-    if (code === "EAUTH" || text.includes("invalid login") || text.includes("username and password not accepted")) {
-        return "Email login failed. Railway me EMAIL_USER/EMAIL_PASS check karo. Gmail ke liye normal password nahi, App Password use karo.";
-    }
-
-    if (
-        code === "ETIMEDOUT" ||
-        code === "ESOCKET" ||
-        code === "ECONNECTION" ||
-        text.includes("timeout") ||
-        text.includes("timed out")
-    ) {
-        return "Email server reply nahi de raha. SMTP/Gmail variables check karo, phir dobara try karo.";
-    }
-
-    return "Verification email could not be sent. Railway logs me Email OTP send error check karo.";
-}
-
-function getEmailLogDetails(err) {
-    return {
-        code: err?.code,
-        command: err?.command,
-        responseCode: err?.responseCode,
-        message: err?.message
-    };
-}
-
 function getEmailError(email) {
     const trimmedEmail = normalizeEmail(email);
 
@@ -408,18 +373,64 @@ function getEmailError(email) {
         return "Please enter a valid email address. Example: student@gmail.com";
     }
 
+    const [localPart, domain] = trimmedEmail.split("@");
+    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+        const suggestedDomain = getClosestAllowedEmailDomain(domain);
+
+        if (suggestedDomain) {
+            return `Please check the email domain spelling. Did you mean ${localPart}@${suggestedDomain}?`;
+        }
+
+        return "Please use only @gmail.com, @outlook.com, or @yahoo.com email addresses.";
+    }
+
     return "";
 }
 
-function generateOtp() {
-    return String(crypto.randomInt(100000, 1000000));
+function getClosestAllowedEmailDomain(domain) {
+    const distances = ALLOWED_EMAIL_DOMAINS
+        .map((allowedDomain) => ({
+            domain: allowedDomain,
+            distance: getEditDistance(domain, allowedDomain)
+        }))
+        .sort((left, right) => left.distance - right.distance);
+
+    const bestMatch = distances[0];
+    return bestMatch && bestMatch.distance <= 2 ? bestMatch.domain : "";
 }
 
-function hashOtp(email, otp) {
-    return crypto
-        .createHmac("sha256", TOKEN_SECRET)
-        .update(`${normalizeEmail(email)}:${String(otp).trim()}`)
-        .digest("hex");
+function getEditDistance(left, right) {
+    const rows = Array.from({ length: left.length + 1 }, () => []);
+
+    for (let i = 0; i <= left.length; i += 1) rows[i][0] = i;
+    for (let j = 0; j <= right.length; j += 1) rows[0][j] = j;
+
+    for (let i = 1; i <= left.length; i += 1) {
+        for (let j = 1; j <= right.length; j += 1) {
+            const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+            rows[i][j] = Math.min(
+                rows[i - 1][j] + 1,
+                rows[i][j - 1] + 1,
+                rows[i - 1][j - 1] + cost
+            );
+        }
+    }
+
+    return rows[left.length][right.length];
+}
+
+function getEmployeeIdError(employeeId) {
+    const trimmedEmployeeId = String(employeeId || "").trim();
+
+    if (!trimmedEmployeeId) {
+        return "Please enter your Employee ID.";
+    }
+
+    if (!trimmedEmployeeId.startsWith("ACC")) {
+        return "Employee ID must start with ACC.";
+    }
+
+    return "";
 }
 
 function getStudentName(leave) {
@@ -443,7 +454,7 @@ function validateLeave(body) {
         endDate: String(body.endDate || "").trim(),
         team: String(body.team || "").trim(),
         reason: String(body.reason || "").trim(),
-        email: String(body.email || "").trim()
+        email: normalizeEmail(body.email)
     };
 
     const missingField = Object.entries(leave).find(([, value]) => !value);
@@ -451,6 +462,9 @@ function validateLeave(body) {
 
     const emailError = getEmailError(leave.email);
     if (emailError) return { error: emailError };
+
+    const employeeIdError = getEmployeeIdError(leave.employeeId);
+    if (employeeIdError) return { error: employeeIdError };
 
     const startTime = Date.parse(leave.startDate);
     const endTime = Date.parse(leave.endDate);
@@ -520,91 +534,40 @@ function getAdminPanelUrl(req) {
     return `${getAppBaseUrl(req)}/admin.html`;
 }
 
-async function sendEmailVerificationOtp(email, name) {
-    const transporter = getTransporter();
-    if (!transporter) {
-        return {
-            sent: false,
-            status: 500,
-            message: "Email service is not configured"
-        };
-    }
+function getMailBranding() {
+    return {
+        hrName: process.env.HR_NAME || "Faizah Waseem",
+        hrDepartment: process.env.HR_DEPARTMENT || "HR Department",
+        companyName: process.env.COMPANY_NAME || "Analytics Career Connect",
+        companyLogoUrl: process.env.COMPANY_LOGO_URL || DEFAULT_COMPANY_LOGO_URL
+    };
+}
 
-    const normalizedEmail = normalizeEmail(email);
-    const [recentRows] = await db.execute(
-        `
-        SELECT TIMESTAMPDIFF(SECOND, createdAt, NOW()) AS secondsAgo
-        FROM email_verifications
-        WHERE email=?
-        ORDER BY id DESC
-        LIMIT 1
-        `,
-        [normalizedEmail]
-    );
-
-    const secondsAgo = Number(recentRows[0]?.secondsAgo);
-    if (Number.isFinite(secondsAgo) && secondsAgo < EMAIL_OTP_RESEND_SECONDS) {
-        return {
-            sent: false,
-            status: 429,
-            message: `Please wait ${EMAIL_OTP_RESEND_SECONDS - secondsAgo} seconds before requesting another code.`
-        };
-    }
-
-    const otp = generateOtp();
-    const otpHash = hashOtp(normalizedEmail, otp);
-    const studentName = getStudentName({ name, email: normalizedEmail });
-    const hrName = process.env.HR_NAME || "Faizah Waseem";
-    const hrDepartment = process.env.HR_DEPARTMENT || "HR Department";
-    const companyName = process.env.COMPANY_NAME || "Analytics Career Connect";
-    const companyLogoUrl = process.env.COMPANY_LOGO_URL || DEFAULT_COMPANY_LOGO_URL;
-
-    const [insertResult] = await db.execute(
-        `
-        INSERT INTO email_verifications (email, otpHash, expiresAt)
-        VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ${EMAIL_OTP_TTL_MINUTES} MINUTE))
-        `,
-        [normalizedEmail, otpHash]
-    );
-
-    const html = `
-    <div style="font-family:Arial;padding:20px">
-        <div style="text-align:center;margin-bottom:20px">
-            <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="width:480px;max-width:100%;max-height:260px;object-fit:contain">
-        </div>
-        <h2>Email Verification Code</h2>
-        <p>Dear <b>${escapeHtml(studentName)}</b>,</p>
-        <p>Your one-time email verification code is:</p>
-        <p style="font-size:28px;font-weight:bold;letter-spacing:4px">${escapeHtml(otp)}</p>
-        <p>This code will expire in ${EMAIL_OTP_TTL_MINUTES} minutes.</p>
-        <br>
-        <p>Regards,<br>
-        <b>${escapeHtml(hrName)}</b><br>
-        ${escapeHtml(hrDepartment)}<br>
-        ${escapeHtml(companyName)}</p>
-    </div>
+function renderEmailPanel({ title, titleColor = "#111827", bodyHtml, footerHtml = "" }) {
+    const { hrName, hrDepartment, companyName, companyLogoUrl } = getMailBranding();
+    const footer = footerHtml || `
+        <p style="margin:16px 0 0;line-height:1.5">
+            Regards,<br>
+            <b>${escapeHtml(hrName)}</b><br>
+            ${escapeHtml(hrDepartment)}<br>
+            ${escapeHtml(companyName)}
+        </p>
     `;
 
-    try {
-        await transporter.sendMail({
-            from: getEmailFromAddress(),
-            to: {
-                name: studentName,
-                address: normalizedEmail
-            },
-            subject: "Email Verification Code",
-            text: `Email Verification Code\n\nDear ${studentName},\n\nYour one-time email verification code is: ${otp}\nThis code will expire in ${EMAIL_OTP_TTL_MINUTES} minutes.\n\nRegards,\n${hrName}\n${hrDepartment}\n${companyName}`,
-            html
-        });
-    } catch (err) {
-        await db.execute("DELETE FROM email_verifications WHERE id=?", [insertResult.insertId]);
-        throw err;
-    }
-
-    return {
-        sent: true,
-        message: "Verification code sent to your email."
-    };
+    return `
+    <div style="margin:0;padding:16px;background:#f4f6f9">
+        <div style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:8px;padding:16px 18px;font-family:Arial,sans-serif;color:#111827">
+            <div style="text-align:center;margin:0 0 10px">
+                <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="display:block;width:240px;max-width:72%;height:auto;max-height:110px;object-fit:contain;margin:0 auto">
+            </div>
+            <h2 style="margin:0 0 12px;color:${escapeHtml(titleColor)};font-size:22px;line-height:1.25">${escapeHtml(title)}</h2>
+            <div style="font-size:15px;line-height:1.5">
+                ${bodyHtml}
+                ${footer}
+            </div>
+        </div>
+    </div>
+    `;
 }
 
 async function sendAdminLeaveNotification(leave, adminPanelUrl) {
@@ -617,37 +580,26 @@ async function sendAdminLeaveNotification(leave, adminPanelUrl) {
     const studentName = getStudentName(leave);
     const startDate = formatMailDate(leave.startDate);
     const endDate = formatMailDate(leave.endDate);
-    const hrName = process.env.HR_NAME || "Faizah Waseem";
-    const hrDepartment = process.env.HR_DEPARTMENT || "HR Department";
-    const companyName = process.env.COMPANY_NAME || "Analytics Career Connect";
-    const companyLogoUrl = process.env.COMPANY_LOGO_URL || DEFAULT_COMPANY_LOGO_URL;
+    const { hrName, hrDepartment, companyName } = getMailBranding();
 
-    const html = `
-    <div style="font-family:Arial;padding:20px">
-        <div style="text-align:center;margin-bottom:20px">
-            <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="width:480px;max-width:100%;max-height:260px;object-fit:contain">
-        </div>
-        <h2>New Leave Application</h2>
-        <p>A new leave application has been submitted.</p>
-        <table style="border-collapse:collapse;width:100%;max-width:620px">
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Name</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(studentName)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Employee ID</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(leave.employeeId)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Batch</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(leave.team)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Email</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(leave.email)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Leave Dates</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(startDate)} to ${escapeHtml(endDate)}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd"><b>Reason</b></td><td style="padding:8px;border:1px solid #ddd">${escapeHtml(leave.reason)}</td></tr>
+    const html = renderEmailPanel({
+        title: "New Leave Application",
+        bodyHtml: `
+        <p style="margin:0 0 12px">A new leave application has been submitted.</p>
+        <table style="border-collapse:collapse;width:100%;max-width:620px;margin:0">
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Name</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(studentName)}</td></tr>
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Employee ID</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(leave.employeeId)}</td></tr>
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Batch</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(leave.team)}</td></tr>
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Email</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(leave.email)}</td></tr>
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Leave Dates</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(startDate)} to ${escapeHtml(endDate)}</td></tr>
+            <tr><td style="padding:7px 8px;border:1px solid #ddd"><b>Reason</b></td><td style="padding:7px 8px;border:1px solid #ddd">${escapeHtml(leave.reason)}</td></tr>
         </table>
-        <p style="margin-top:20px">
+        <p style="margin:14px 0 8px">
             <a href="${escapeHtml(adminPanelUrl)}" style="display:inline-block;background:#111827;color:white;padding:12px 18px;border-radius:6px;text-decoration:none;font-weight:bold">Open Admin Panel</a>
         </p>
-        <p><a href="${escapeHtml(adminPanelUrl)}">${escapeHtml(adminPanelUrl)}</a></p>
-        <br>
-        <p>Regards,<br>
-        <b>${escapeHtml(hrName)}</b><br>
-        ${escapeHtml(hrDepartment)}<br>
-        ${escapeHtml(companyName)}</p>
-    </div>
-    `;
+        <p style="margin:0"><a href="${escapeHtml(adminPanelUrl)}">${escapeHtml(adminPanelUrl)}</a></p>
+        `
+    });
 
     await transporter.sendMail({
         from: getEmailFromAddress(),
@@ -670,30 +622,20 @@ async function sendStatusEmail(leave, status) {
     const studentName = getStudentName(leave);
     const startDate = formatMailDate(leave.startDate);
     const endDate = formatMailDate(leave.endDate);
-    const hrName = process.env.HR_NAME || "Faizah Waseem";
-    const hrDepartment = process.env.HR_DEPARTMENT || "HR Department";
-    const companyName = process.env.COMPANY_NAME || "Analytics Career Connect";
-    const companyLogoUrl = process.env.COMPANY_LOGO_URL || DEFAULT_COMPANY_LOGO_URL;
+    const { hrName, hrDepartment, companyName } = getMailBranding();
     const bodyText = approved
         ? "your leave has been approved for the selected date duration."
         : "your leave request cannot be approved at this time.";
 
-    const html = `
-    <div style="font-family:Arial;padding:20px">
-        <div style="text-align:center;margin-bottom:20px">
-            <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="width:480px;max-width:100%;max-height:260px;object-fit:contain">
-        </div>
-        <h2 style="color:${color};">${title}</h2>
-        <p>Dear <b>${escapeHtml(studentName)}</b>,</p>
-        <p>${escapeHtml(studentName)}, ${bodyText}</p>
-        <p>Leave dates: <b>${escapeHtml(startDate)}</b> to <b>${escapeHtml(endDate)}</b></p>
-        <br>
-        <p>Regards,<br>
-        <b>${escapeHtml(hrName)}</b><br>
-        ${escapeHtml(hrDepartment)}<br>
-        ${escapeHtml(companyName)}</p>
-    </div>
-    `;
+    const html = renderEmailPanel({
+        title,
+        titleColor: color,
+        bodyHtml: `
+        <p style="margin:0 0 10px">Dear <b>${escapeHtml(studentName)}</b>,</p>
+        <p style="margin:0 0 10px">${escapeHtml(studentName)}, ${escapeHtml(bodyText)}</p>
+        <p style="margin:0">Leave dates: <b>${escapeHtml(startDate)}</b> to <b>${escapeHtml(endDate)}</b></p>
+        `
+    });
 
     await transporter.sendMail({
         from: getEmailFromAddress(),
@@ -707,6 +649,123 @@ async function sendStatusEmail(leave, status) {
     });
 
     return { sent: true };
+}
+
+function formatDateTimeForDb(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+
+    return [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate())
+    ].join("-") + " " + [
+        pad(date.getHours()),
+        pad(date.getMinutes()),
+        pad(date.getSeconds())
+    ].join(":");
+}
+
+async function enqueueEmailJob(type, payload) {
+    const runAt = new Date(Date.now() + EMAIL_SEND_DELAY_MS);
+
+    await db.execute(
+        `
+        INSERT INTO email_jobs (type, payload, runAt)
+        VALUES (?, ?, ?)
+        `,
+        [type, JSON.stringify(payload), formatDateTimeForDb(runAt)]
+    );
+
+    scheduleEmailJobWake(runAt);
+    return runAt;
+}
+
+let emailJobProcessing = false;
+
+function scheduleEmailJobWake(runAt) {
+    const delayMs = Math.max(0, runAt.getTime() - Date.now() + 100);
+    const timer = setTimeout(runEmailWorker, delayMs);
+    timer.unref?.();
+}
+
+function runEmailWorker() {
+    processDueEmailJobs().catch((err) => {
+        console.log("Email job worker error:", err.message);
+    });
+}
+
+async function processDueEmailJobs() {
+    if (emailJobProcessing) return;
+
+    emailJobProcessing = true;
+
+    try {
+        const [jobs] = await db.execute(
+            `
+            SELECT id, type, payload, attempts
+            FROM email_jobs
+            WHERE status='Pending' AND runAt <= ?
+            ORDER BY runAt ASC, id ASC
+            LIMIT 10
+            `,
+            [formatDateTimeForDb(new Date())]
+        );
+
+        for (const job of jobs) {
+            await processEmailJob(job);
+        }
+    } finally {
+        emailJobProcessing = false;
+    }
+}
+
+async function processEmailJob(job) {
+    const [claim] = await db.execute(
+        "UPDATE email_jobs SET status='Processing', attempts=attempts+1, lastError=NULL WHERE id=? AND status='Pending'",
+        [job.id]
+    );
+
+    if (!claim.affectedRows) return;
+
+    const attempts = Number(job.attempts || 0) + 1;
+
+    try {
+        const payload = JSON.parse(job.payload);
+        await deliverEmailJob(job.type, payload);
+        await db.execute("UPDATE email_jobs SET status='Sent', lastError=NULL WHERE id=?", [job.id]);
+    } catch (err) {
+        const failedPermanently = attempts >= EMAIL_JOB_MAX_ATTEMPTS;
+        const nextStatus = failedPermanently ? "Failed" : "Pending";
+        const nextRunAt = new Date(Date.now() + EMAIL_JOB_RETRY_DELAY_MS);
+        const lastError = String(err?.message || err || "Email job failed").slice(0, 1000);
+
+        await db.execute(
+            "UPDATE email_jobs SET status=?, runAt=?, lastError=? WHERE id=?",
+            [nextStatus, formatDateTimeForDb(nextRunAt), lastError, job.id]
+        );
+
+        if (!failedPermanently) {
+            scheduleEmailJobWake(nextRunAt);
+        }
+
+        console.log(`Email job ${job.id} ${nextStatus.toLowerCase()}:`, lastError);
+    }
+}
+
+async function deliverEmailJob(type, payload) {
+    let result;
+
+    if (type === "adminLeaveNotification") {
+        result = await sendAdminLeaveNotification(payload.leave, payload.adminPanelUrl);
+    } else if (type === "statusEmail") {
+        result = await sendStatusEmail(payload.leave, payload.status);
+    } else {
+        throw new Error(`Unknown email job type: ${type}`);
+    }
+
+    if (!result.sent) {
+        throw new Error(result.reason || "Email was not sent");
+    }
 }
 
 /* ===== HEALTH ===== */
@@ -771,121 +830,6 @@ app.post("/login", async (req, res) => {
     }
 });
 
-/* ===== EMAIL VERIFICATION ===== */
-app.post("/send-email-otp", async (req, res) => {
-    const email = normalizeEmail(req.body.email);
-    const name = String(req.body.name || "").trim();
-    const emailError = getEmailError(email);
-
-    if (emailError) {
-        return res.status(400).json({
-            success: false,
-            message: emailError
-        });
-    }
-
-    try {
-        const result = await sendEmailVerificationOtp(email, name);
-
-        if (!result.sent) {
-            return res.status(result.status || 500).json({
-                success: false,
-                message: result.message
-            });
-        }
-
-        res.json({
-            success: true,
-            message: result.message
-        });
-    } catch (err) {
-        console.log("Email OTP send error:", getEmailLogDetails(err));
-        res.status(500).json({
-            success: false,
-            message: getEmailSendErrorMessage(err)
-        });
-    }
-});
-
-app.post("/verify-email-otp", async (req, res) => {
-    const email = normalizeEmail(req.body.email);
-    const otp = String(req.body.otp || "").trim();
-    const emailError = getEmailError(email);
-
-    if (emailError) {
-        return res.status(400).json({
-            success: false,
-            message: emailError
-        });
-    }
-
-    if (!/^\d{6}$/.test(otp)) {
-        return res.status(400).json({
-            success: false,
-            message: "Please enter the 6-digit verification code."
-        });
-    }
-
-    try {
-        const [rows] = await db.execute(
-            `
-            SELECT id, otpHash, attempts, expiresAt <= NOW() AS expired
-            FROM email_verifications
-            WHERE email=? AND verifiedAt IS NULL
-            ORDER BY id DESC
-            LIMIT 1
-            `,
-            [email]
-        );
-
-        const verification = rows[0];
-        if (!verification) {
-            return res.status(400).json({
-                success: false,
-                message: "Please request a verification code first."
-            });
-        }
-
-        if (Number(verification.expired)) {
-            return res.status(400).json({
-                success: false,
-                message: "Verification code expired. Please request a new code."
-            });
-        }
-
-        if (Number(verification.attempts) >= EMAIL_OTP_MAX_ATTEMPTS) {
-            return res.status(429).json({
-                success: false,
-                message: "Too many incorrect attempts. Please request a new code."
-            });
-        }
-
-        const validOtp = timingSafeEqualText(hashOtp(email, otp), verification.otpHash);
-
-        if (!validOtp) {
-            await db.execute("UPDATE email_verifications SET attempts=attempts+1 WHERE id=?", [verification.id]);
-            return res.status(400).json({
-                success: false,
-                message: "Incorrect verification code."
-            });
-        }
-
-        await db.execute("UPDATE email_verifications SET verifiedAt=NOW() WHERE id=?", [verification.id]);
-
-        res.json({
-            success: true,
-            message: "Email verified.",
-            token: createEmailVerificationToken(email)
-        });
-    } catch (err) {
-        console.log("Email OTP verify error:", err.message);
-        res.status(500).json({
-            success: false,
-            message: "Verification failed. Please try again."
-        });
-    }
-});
-
 /* ===== APPLY LEAVE ===== */
 app.post("/apply-leave", async (req, res) => {
     const { leave, error } = validateLeave(req.body);
@@ -894,12 +838,8 @@ app.post("/apply-leave", async (req, res) => {
         return res.status(400).send(error);
     }
 
-    if (!verifyEmailVerificationToken(req.body.emailVerificationToken, leave.email)) {
-        return res.status(400).send("Please verify your email before applying leave.");
-    }
-
     try {
-        await db.execute(
+        const [result] = await db.execute(
             `
             INSERT INTO leaves (name, employeeId, startDate, endDate, team, reason, email)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -915,16 +855,26 @@ app.post("/apply-leave", async (req, res) => {
             ]
         );
 
+        const savedLeave = {
+            ...leave,
+            id: result.insertId
+        };
+
+        let notificationQueued = true;
+
         try {
-            const notificationResult = await sendAdminLeaveNotification(leave, getAdminPanelUrl(req));
-            if (!notificationResult.sent) {
-                console.log("Admin notification skipped:", notificationResult.reason);
-            }
-        } catch (emailErr) {
-            console.log("Admin notification email error:", emailErr.message);
+            await enqueueEmailJob("adminLeaveNotification", {
+                leave: savedLeave,
+                adminPanelUrl: getAdminPanelUrl(req)
+            });
+        } catch (queueErr) {
+            notificationQueued = false;
+            console.log("Admin notification queue error:", queueErr.message);
         }
 
-        res.send("Leave Applied Successfully");
+        res.send(notificationQueued
+            ? "Leave Applied Successfully. Email will be sent in 2 minutes."
+            : "Leave Applied Successfully, but email scheduling failed.");
     } catch (err) {
         console.log("Leave apply DB error:", err.message);
         res.status(500).send("DB Error");
@@ -971,18 +921,20 @@ async function updateLeaveStatus(req, res, status) {
         await db.execute("UPDATE leaves SET status=? WHERE id=?", [status, id]);
 
         try {
-            const emailResult = await sendStatusEmail(leave, status);
-            const emailMessage = emailResult.sent ? "Email sent" : emailResult.reason;
+            await enqueueEmailJob("statusEmail", {
+                leave,
+                status
+            });
 
             res.json({
                 success: true,
-                message: `${status}. ${emailMessage}.`
+                message: `${status}. Email will be sent in 2 minutes.`
             });
         } catch (emailErr) {
-            console.log(`${status} email error:`, emailErr.message);
+            console.log(`${status} email queue error:`, emailErr.message);
             res.json({
                 success: true,
-                message: `${status}, but email failed.`
+                message: `${status}, but email scheduling failed.`
             });
         }
     } catch (err) {
@@ -1009,8 +961,15 @@ async function startServer() {
             console.log(`Server running on ${HOST}:${PORT}`);
         });
 
+        runEmailWorker();
+
+        const emailJobTimer = setInterval(() => {
+            runEmailWorker();
+        }, EMAIL_JOB_POLL_INTERVAL_MS);
+        emailJobTimer.unref?.();
+
         const cleanupTimer = setInterval(() => {
-            Promise.all([cleanupExpiredLeaves(), cleanupEmailVerifications()]).catch((err) => {
+            Promise.all([cleanupExpiredLeaves(), cleanupOldEmailJobs()]).catch((err) => {
                 console.log("Leave cleanup error:", err.message);
             });
         }, LEAVE_CLEANUP_INTERVAL_MS);

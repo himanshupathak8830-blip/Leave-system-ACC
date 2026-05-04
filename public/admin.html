@@ -52,14 +52,14 @@ h2 {
 .logo-wrap {
     display: flex;
     justify-content: center;
-    margin-bottom: 18px;
+    margin-bottom: 10px;
 }
 
 .company-logo {
     display: block;
-    width: min(100%, 520px);
+    width: min(100%, 380px);
     height: auto;
-    max-height: 280px;
+    max-height: 160px;
     object-fit: contain;
 }
 
@@ -382,19 +382,23 @@ async function rejectLeave(id) {
 async function updateLeaveStatus(path) {
     panelMessage.textContent = "Updating...";
 
-    const res = await fetch(API_BASE + path, {
-        method: "PUT",
-        headers: authHeaders()
-    });
+    try {
+        const res = await fetch(API_BASE + path, {
+            method: "PUT",
+            headers: authHeaders()
+        });
 
-    if (res.status === 401) {
-        logout("Session expired. Please login again.");
-        return;
+        if (res.status === 401) {
+            logout("Session expired. Please login again.");
+            return;
+        }
+
+        const data = await res.json();
+        panelMessage.textContent = data.message || "Updated";
+        await loadData();
+    } catch (err) {
+        panelMessage.textContent = "Update failed. Server check karo.";
     }
-
-    const data = await res.json();
-    panelMessage.textContent = data.message || "Updated";
-    await loadData();
 }
 
 function authHeaders() {
