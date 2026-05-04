@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leave Management</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Arial, sans-serif;
+    background: #f4f6f9;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+}
+
+.container {
+    width: 100%;
+    max-width: 380px;
+    background: #ff8c00;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    color: white;
+}
+
+h2 {
+    margin: 0 0 20px;
+    text-align: center;
+    font-size: 26px;
+}
+
+.logo-wrap {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 18px;
+}
+
+.company-logo {
+    display: block;
+    width: min(100%, 480px);
+    height: auto;
+    max-height: 260px;
+    object-fit: contain;
+}
+
+label {
+    display: block;
+    margin: 4px 0 6px;
+    font-weight: 700;
+}
+
+input,
+select,
+textarea,
+button {
+    width: 100%;
+    font: inherit;
+    border-radius: 8px;
+}
+
+input,
+select,
+textarea {
+    display: block;
+    padding: 11px;
+    margin-bottom: 12px;
+    border: none;
+    outline: none;
+    color: #111827;
+    font-size: 16px;
+}
+
+textarea {
+    min-height: 90px;
+    resize: vertical;
+}
+
+select {
+    min-height: 44px;
+    background: white;
+    font-weight: 700;
+}
+
+select:invalid {
+    color: #6b7280;
+    font-weight: 600;
+}
+
+option {
+    color: #111827;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+button {
+    padding: 12px;
+    background: black;
+    color: white;
+    border: none;
+    cursor: pointer;
+    margin-top: 4px;
+    font-weight: 700;
+}
+
+button:hover {
+    background: #222;
+}
+
+button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.secondary-button {
+    margin-top: 0;
+    margin-bottom: 12px;
+    background: white;
+    color: #111827;
+}
+
+.secondary-button:hover {
+    background: #f3f4f6;
+}
+
+.otp-box input {
+    text-align: center;
+    letter-spacing: 4px;
+    font-weight: 700;
+}
+
+.email-status {
+    min-height: 18px;
+    margin: -4px 0 10px;
+    padding: 0;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.email-status.info {
+    padding: 6px;
+    background: #fef3c7;
+    color: #111827;
+}
+
+.email-status.success {
+    padding: 6px;
+    background: #dcfce7;
+    color: #14532d;
+}
+
+.email-status.error {
+    padding: 6px;
+    background: #fee2e2;
+    color: #7f1d1d;
+}
+
+.hidden {
+    display: none;
+}
+
+.message {
+    min-height: 20px;
+    margin-top: 12px;
+    text-align: center;
+    font-weight: 700;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+    <div class="logo-wrap">
+        <img class="company-logo" src="https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&amp;sz=w800" alt="Analytics Career Connect logo">
+    </div>
+
+    <h2>Apply Leave</h2>
+
+    <form id="form" novalidate>
+        <input name="name" placeholder="Full Name" required>
+        <input name="employeeId" placeholder="Employee ID" required>
+
+        <label for="startDate">Start Date</label>
+        <input id="startDate" type="date" name="startDate" required>
+
+        <label for="endDate">End Date</label>
+        <input id="endDate" type="date" name="endDate" required>
+
+        <label for="batch">Batch</label>
+        <select id="batch" name="team" required>
+            <option value="">Select Batch</option>
+            <option value="Full Time">Full Time</option>
+            <option value="Part Time">Part Time</option>
+        </select>
+
+        <textarea name="reason" placeholder="Reason for leave" required></textarea>
+        <input id="studentEmail" type="text" name="email" placeholder="Email" inputmode="email" autocomplete="email" required>
+        <input id="emailVerificationToken" type="hidden" name="emailVerificationToken">
+        <button id="sendOtpBtn" class="secondary-button" type="button">Verify Email</button>
+        <div id="otpBox" class="otp-box hidden">
+            <input id="emailOtp" type="text" inputmode="numeric" maxlength="6" placeholder="Enter OTP">
+            <button id="verifyOtpBtn" class="secondary-button" type="button">Verify Code</button>
+        </div>
+        <div id="emailStatus" class="email-status"></div>
+
+        <button id="submitBtn" type="submit">Apply Leave</button>
+        <div id="message" class="message"></div>
+    </form>
+</div>
+
+<script>
+const API_BASE = location.protocol === "file:" ? "http://localhost:3000" : "";
+const form = document.getElementById("form");
+const submitBtn = document.getElementById("submitBtn");
+const message = document.getElementById("message");
+const studentEmail = document.getElementById("studentEmail");
+const sendOtpBtn = document.getElementById("sendOtpBtn");
+const otpBox = document.getElementById("otpBox");
+const emailOtp = document.getElementById("emailOtp");
+const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+const emailStatus = document.getElementById("emailStatus");
+const emailVerificationTokenInput = document.getElementById("emailVerificationToken");
+
+let verifiedEmail = "";
+let emailVerificationToken = "";
+
+updateSubmitState();
+
+studentEmail.addEventListener("blur", () => {
+    const emailError = getEmailError(studentEmail.value);
+    if (studentEmail.value.trim() && emailError) {
+        alert(emailError);
+        studentEmail.focus();
+    }
+});
+
+studentEmail.addEventListener("input", resetEmailVerification);
+sendOtpBtn.addEventListener("click", sendEmailOtp);
+verifyOtpBtn.addEventListener("click", verifyEmailOtp);
+
+form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const data = Object.fromEntries(new FormData(form));
+
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+
+    const emailError = getEmailError(data.email);
+    if (emailError) {
+        alert(emailError);
+        studentEmail.focus();
+        return;
+    }
+
+    if (!emailVerificationToken || verifiedEmail !== normalizeEmail(data.email)) {
+        alert("Please verify your email before applying leave.");
+        studentEmail.focus();
+        return;
+    }
+
+    data.emailVerificationToken = emailVerificationToken;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
+    message.textContent = "";
+
+    try {
+        const res = await fetch(API_BASE + "/apply-leave", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data)
+        });
+
+        const text = await res.text();
+
+        if (!res.ok) {
+            message.textContent = text || "Leave submit nahi hua. Server check karo.";
+            if ((text || "").toLowerCase().includes("verify")) {
+                resetEmailVerification();
+            }
+            return;
+        }
+
+        message.textContent = text || "Leave Applied Successfully";
+        form.reset();
+        resetEmailVerification();
+    } catch (err) {
+        message.textContent = "Server connect nahi ho raha. http://localhost:3000 se page open karo.";
+    } finally {
+        updateSubmitState();
+        submitBtn.textContent = "Apply Leave";
+    }
+});
+
+async function sendEmailOtp() {
+    const emailError = getEmailError(studentEmail.value);
+
+    if (emailError) {
+        alert(emailError);
+        studentEmail.focus();
+        return;
+    }
+
+    resetEmailVerification();
+    sendOtpBtn.disabled = true;
+    sendOtpBtn.textContent = "Sending...";
+    setEmailStatus("Sending verification code...", "info");
+
+    try {
+        const data = Object.fromEntries(new FormData(form));
+        const res = await fetch(API_BASE + "/send-email-otp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: studentEmail.value,
+                name: data.name
+            })
+        });
+        const result = await res.json();
+
+        if (!res.ok || !result.success) {
+            setEmailStatus(result.message || "Verification code send nahi hua.", "error");
+            return;
+        }
+
+        otpBox.classList.remove("hidden");
+        emailOtp.value = "";
+        emailOtp.focus();
+        setEmailStatus(result.message || "Verification code sent to your email.", "info");
+    } catch (err) {
+        setEmailStatus("Server connect nahi ho raha.", "error");
+    } finally {
+        sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = "Resend Code";
+    }
+}
+
+async function verifyEmailOtp() {
+    const emailError = getEmailError(studentEmail.value);
+    const otp = emailOtp.value.trim();
+
+    if (emailError) {
+        alert(emailError);
+        studentEmail.focus();
+        return;
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
+        alert("Please enter the 6-digit verification code.");
+        emailOtp.focus();
+        return;
+    }
+
+    verifyOtpBtn.disabled = true;
+    verifyOtpBtn.textContent = "Verifying...";
+    setEmailStatus("Verifying code...", "info");
+
+    try {
+        const res = await fetch(API_BASE + "/verify-email-otp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: studentEmail.value,
+                otp
+            })
+        });
+        const result = await res.json();
+
+        if (!res.ok || !result.success || !result.token) {
+            setEmailStatus(result.message || "Verification failed.", "error");
+            return;
+        }
+
+        verifiedEmail = normalizeEmail(studentEmail.value);
+        emailVerificationToken = result.token;
+        emailVerificationTokenInput.value = result.token;
+        otpBox.classList.add("hidden");
+        sendOtpBtn.disabled = true;
+        sendOtpBtn.textContent = "Email Verified";
+        setEmailStatus(result.message || "Email verified.", "success");
+        updateSubmitState();
+    } catch (err) {
+        setEmailStatus("Server connect nahi ho raha.", "error");
+    } finally {
+        verifyOtpBtn.disabled = false;
+        verifyOtpBtn.textContent = "Verify Code";
+    }
+}
+
+function resetEmailVerification() {
+    verifiedEmail = "";
+    emailVerificationToken = "";
+    emailVerificationTokenInput.value = "";
+    otpBox.classList.add("hidden");
+    emailOtp.value = "";
+    sendOtpBtn.disabled = false;
+    sendOtpBtn.textContent = "Verify Email";
+    setEmailStatus("", "");
+    updateSubmitState();
+}
+
+function updateSubmitState() {
+    submitBtn.disabled = !emailVerificationToken;
+}
+
+function setEmailStatus(text, type) {
+    emailStatus.textContent = text;
+    emailStatus.className = type ? `email-status ${type}` : "email-status";
+}
+
+function normalizeEmail(email) {
+    return String(email || "").trim().toLowerCase();
+}
+
+function getEmailError(email) {
+    const trimmedEmail = normalizeEmail(email);
+
+    if (!trimmedEmail) {
+        return "Please enter your email address.";
+    }
+
+    if (trimmedEmail.startsWith("@")) {
+        return "Email me @ se pehle name likho. Example: student@gmail.com";
+    }
+
+    if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmedEmail)) {
+        return "Please enter a valid email address. Example: student@gmail.com";
+    }
+
+    return "";
+}
+</script>
+</body>
+</html>
