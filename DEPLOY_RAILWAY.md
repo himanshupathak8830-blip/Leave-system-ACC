@@ -51,9 +51,38 @@ If the app logs `Startup error: connect ECONNREFUSED ::1:3306`, the app service 
 
 ## 4. Email Variables
 
-For leave submission and approval/rejection notification emails, add:
+For leave submission and approval/rejection notification emails on Railway Free/Trial/Hobby, use an HTTPS email API:
 
 ```env
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM=Analytics Career Connect <noreply@your_verified_domain.com>
+EMAIL_FROM=Analytics Career Connect <noreply@your_verified_domain.com>
+LEAVE_NOTIFICATION_EMAIL=your_admin_notification_email@gmail.com
+HR_NAME=Faizah Waseem
+HR_DEPARTMENT=HR Department
+COMPANY_NAME=Analytics Career Connect
+COMPANY_LOGO_URL=https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800
+EMAIL_SEND_TIMEOUT_MS=20000
+EMAIL_SEND_DELAY_MS=0
+EMAIL_JOB_POLL_INTERVAL_MS=5000
+EMAIL_JOB_RETRY_DELAY_MS=60000
+```
+
+Or use SendGrid:
+
+```env
+EMAIL_PROVIDER=sendgrid
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM=Analytics Career Connect <your_verified_sender@example.com>
+EMAIL_FROM=Analytics Career Connect <your_verified_sender@example.com>
+LEAVE_NOTIFICATION_EMAIL=your_admin_notification_email@gmail.com
+```
+
+SMTP/Gmail variables are only useful locally or on Railway Pro and above:
+
+```env
+EMAIL_PROVIDER=smtp
 EMAIL_SERVICE=gmail
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_gmail_app_password_without_spaces
@@ -69,7 +98,7 @@ EMAIL_JOB_POLL_INTERVAL_MS=5000
 EMAIL_JOB_RETRY_DELAY_MS=60000
 ```
 
-For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. Keep `EMAIL_SEND_DELAY_MS=0` for near-immediate leave submission and approval/rejection emails.
+For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. Keep `EMAIL_SEND_DELAY_MS=0` for near-immediate leave submission and approval/rejection emails. The admin panel also shows recent email job status/errors after login.
 
 ## 5. Deploy
 

@@ -9,16 +9,16 @@ const nodemailer = require("nodemailer");
 loadLocalEnv();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || "0.0.0.0";
-const TOKEN_SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
-const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS) || 8 * 60 * 60 * 1000;
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const PORT = Number(envValue("PORT")) || 3000;
+const HOST = envValue("HOST") || "0.0.0.0";
+const TOKEN_SECRET = envValue("TOKEN_SECRET") || crypto.randomBytes(32).toString("hex");
+const TOKEN_TTL_MS = Number(envValue("TOKEN_TTL_MS")) || 8 * 60 * 60 * 1000;
+const ADMIN_EMAIL = envValue("ADMIN_EMAIL");
+const ADMIN_PASSWORD = envValue("ADMIN_PASSWORD");
 const DEFAULT_APP_URL = "https://leaves-management-system8-production.up.railway.app";
 const DEFAULT_ADMIN_PANEL_URL = `${DEFAULT_APP_URL}/admin.html`;
 const DEFAULT_COMPANY_LOGO_URL = "https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800";
-const LEAVE_RETENTION_DAYS = Math.max(1, Number.parseInt(process.env.LEAVE_RETENTION_DAYS || "7", 10) || 7);
+const LEAVE_RETENTION_DAYS = Math.max(1, Number.parseInt(envValue("LEAVE_RETENTION_DAYS") || "7", 10) || 7);
 const LEAVE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const EMAIL_ADMIN_NOTIFICATION_DELAY_MS = Math.max(0, envDurationMs(0, [
     "EMAIL_ADMIN_NOTIFICATION_DELAY_MS",
@@ -92,15 +92,29 @@ function loadLocalEnv() {
 
 function envValue(...names) {
     for (const name of names) {
-        if (process.env[name]) return process.env[name];
+        const value = cleanEnvValue(process.env[name]);
+        if (value) return value;
     }
 
     return "";
 }
 
+function cleanEnvValue(value) {
+    const trimmed = String(value || "").trim();
+
+    if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
+        return trimmed.slice(1, -1).trim();
+    }
+
+    return trimmed;
+}
+
 function envDurationMs(defaultMs, names) {
     for (const name of names) {
-        const rawValue = process.env[name];
+        const rawValue = envValue(name);
         if (!rawValue) continue;
 
         const parsed = Number.parseFloat(rawValue);
@@ -356,7 +370,7 @@ function normalizeEmail(email) {
 }
 
 function getEmailPassword(emailUser, rawEmailPass) {
-    const service = String(process.env.EMAIL_SERVICE || "").trim().toLowerCase();
+    const service = envValue("EMAIL_SERVICE").toLowerCase();
     const isGmailAccount = service === "gmail" || normalizeEmail(emailUser).endsWith("@gmail.com");
 
     if (isGmailAccount) {
@@ -364,6 +378,16 @@ function getEmailPassword(emailUser, rawEmailPass) {
     }
 
     return rawEmailPass;
+}
+
+function getEmailProvider() {
+    const configuredProvider = envValue("EMAIL_PROVIDER", "MAIL_PROVIDER").toLowerCase();
+    if (configuredProvider) return configuredProvider;
+
+    if (envValue("RESEND_API_KEY")) return "resend";
+    if (envValue("SENDGRID_API_KEY")) return "sendgrid";
+
+    return "smtp";
 }
 
 function getTransporter() {
@@ -398,13 +422,14 @@ function getTransporter() {
     }
 
     return nodemailer.createTransport({
-        service: process.env.EMAIL_SERVICE || "gmail",
+        service: envValue("EMAIL_SERVICE") || "gmail",
         ...commonOptions
     });
 }
 
 function getEmailFromAddress() {
-    return envValue("EMAIL_FROM", "SMTP_FROM", "MAIL_FROM") || envValue("EMAIL_USER", "SMTP_USER", "MAIL_USER");
+    return envValue("RESEND_FROM", "SENDGRID_FROM", "EMAIL_FROM", "SMTP_FROM", "MAIL_FROM") ||
+        envValue("EMAIL_USER", "SMTP_USER", "MAIL_USER");
 }
 
 function getEmailError(email) {
@@ -596,14 +621,14 @@ function getRequestBaseUrl(req) {
 }
 
 function getAppBaseUrl(req) {
-    const configuredUrl = normalizePublicUrl(process.env.APP_URL || process.env.PUBLIC_URL);
+    const configuredUrl = normalizePublicUrl(envValue("APP_URL", "PUBLIC_URL"));
     if (configuredUrl) return configuredUrl;
 
     return getRequestBaseUrl(req) || DEFAULT_APP_URL;
 }
 
 function getAdminPanelUrl(req) {
-    const configuredUrl = normalizePublicUrl(process.env.ADMIN_PANEL_URL);
+    const configuredUrl = normalizePublicUrl(envValue("ADMIN_PANEL_URL"));
     const requestBaseUrl = getRequestBaseUrl(req);
     const requestAdminUrl = requestBaseUrl ? `${requestBaseUrl}/admin.html` : "";
 
@@ -619,10 +644,10 @@ function getAdminPanelUrl(req) {
 
 function getMailBranding() {
     return {
-        hrName: process.env.HR_NAME || "Faizah Waseem",
-        hrDepartment: process.env.HR_DEPARTMENT || "HR Department",
-        companyName: process.env.COMPANY_NAME || "Analytics Career Connect",
-        companyLogoUrl: process.env.COMPANY_LOGO_URL || DEFAULT_COMPANY_LOGO_URL
+        hrName: envValue("HR_NAME") || "Faizah Waseem",
+        hrDepartment: envValue("HR_DEPARTMENT") || "HR Department",
+        companyName: envValue("COMPANY_NAME") || "Analytics Career Connect",
+        companyLogoUrl: envValue("COMPANY_LOGO_URL") || DEFAULT_COMPANY_LOGO_URL
     };
 }
 
@@ -653,11 +678,168 @@ function renderEmailPanel({ title, titleColor = "#111827", bodyHtml, footerHtml 
     `;
 }
 
-async function sendAdminLeaveNotification(leave, adminPanelUrl) {
+function parseMailAddress(value) {
+    if (value && typeof value === "object") {
+        return {
+            email: normalizeEmail(value.address),
+            name: String(value.name || "").trim()
+        };
+    }
+
+    const text = String(value || "").trim();
+    const formattedMatch = text.match(/^(.*?)<([^>]+)>$/);
+
+    if (formattedMatch) {
+        return {
+            email: normalizeEmail(formattedMatch[2]),
+            name: formattedMatch[1].replace(/^"|"$/g, "").trim()
+        };
+    }
+
+    return {
+        email: normalizeEmail(text),
+        name: ""
+    };
+}
+
+function mailRecipients(value) {
+    const recipients = Array.isArray(value) ? value : [value];
+
+    return recipients
+        .map(parseMailAddress)
+        .filter((recipient) => recipient.email);
+}
+
+function formatSenderForApi(value) {
+    const recipient = parseMailAddress(value);
+    if (!recipient.email) return "";
+
+    return recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email;
+}
+
+function getProviderErrorMessage(provider, responseText) {
+    try {
+        const parsed = JSON.parse(responseText);
+        return parsed?.message || parsed?.error?.message || parsed?.errors?.[0]?.message || responseText;
+    } catch {
+        return responseText;
+    }
+}
+
+function getEmailConfigurationSummary() {
+    return {
+        provider: getEmailProvider(),
+        smtpConfigured: Boolean(envValue("EMAIL_USER", "SMTP_USER", "MAIL_USER") && envValue("EMAIL_PASS", "SMTP_PASS", "MAIL_PASS")),
+        resendConfigured: Boolean(envValue("RESEND_API_KEY")),
+        sendgridConfigured: Boolean(envValue("SENDGRID_API_KEY")),
+        fromConfigured: Boolean(getEmailFromAddress()),
+        notificationEmailConfigured: Boolean(envValue("LEAVE_NOTIFICATION_EMAIL") || ADMIN_EMAIL || envValue("EMAIL_USER"))
+    };
+}
+
+async function sendEmail(mailOptions) {
+    const provider = getEmailProvider();
+
+    if (provider === "resend") {
+        return sendEmailWithResend(mailOptions);
+    }
+
+    if (provider === "sendgrid") {
+        return sendEmailWithSendGrid(mailOptions);
+    }
+
+    if (!["smtp", "gmail", "nodemailer"].includes(provider)) {
+        return { sent: false, reason: `Unsupported EMAIL_PROVIDER: ${provider}` };
+    }
+
     const transporter = getTransporter();
     if (!transporter) return { sent: false, reason: "Email is not configured" };
 
-    const adminEmail = normalizeEmail(process.env.LEAVE_NOTIFICATION_EMAIL || ADMIN_EMAIL || process.env.EMAIL_USER);
+    await transporter.sendMail(mailOptions);
+    return { sent: true };
+}
+
+async function sendEmailWithResend(mailOptions) {
+    const apiKey = envValue("RESEND_API_KEY");
+    if (!apiKey) return { sent: false, reason: "RESEND_API_KEY is not configured" };
+
+    const from = formatSenderForApi(envValue("RESEND_FROM") || mailOptions.from);
+    const to = mailRecipients(mailOptions.to).map((recipient) => recipient.email);
+
+    if (!from) return { sent: false, reason: "RESEND_FROM or EMAIL_FROM is not configured" };
+    if (!to.length) return { sent: false, reason: "Email recipient is missing" };
+
+    const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            from,
+            to,
+            subject: mailOptions.subject,
+            text: mailOptions.text,
+            html: mailOptions.html
+        })
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+        throw new Error(`Resend API error ${response.status}: ${getProviderErrorMessage("resend", responseText)}`);
+    }
+
+    return { sent: true };
+}
+
+async function sendEmailWithSendGrid(mailOptions) {
+    const apiKey = envValue("SENDGRID_API_KEY");
+    if (!apiKey) return { sent: false, reason: "SENDGRID_API_KEY is not configured" };
+
+    const from = parseMailAddress(envValue("SENDGRID_FROM") || mailOptions.from);
+    const to = mailRecipients(mailOptions.to);
+
+    if (!from.email) return { sent: false, reason: "SENDGRID_FROM or EMAIL_FROM is not configured" };
+    if (!to.length) return { sent: false, reason: "Email recipient is missing" };
+
+    const content = [];
+    if (mailOptions.text) content.push({ type: "text/plain", value: mailOptions.text });
+    if (mailOptions.html) content.push({ type: "text/html", value: mailOptions.html });
+
+    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            personalizations: [
+                {
+                    to: to.map((recipient) => ({
+                        email: recipient.email,
+                        ...(recipient.name ? { name: recipient.name } : {})
+                    }))
+                }
+            ],
+            from: {
+                email: from.email,
+                ...(from.name ? { name: from.name } : {})
+            },
+            subject: mailOptions.subject,
+            content
+        })
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+        throw new Error(`SendGrid API error ${response.status}: ${getProviderErrorMessage("sendgrid", responseText)}`);
+    }
+
+    return { sent: true };
+}
+
+async function sendAdminLeaveNotification(leave, adminPanelUrl) {
+    const adminEmail = normalizeEmail(envValue("LEAVE_NOTIFICATION_EMAIL") || ADMIN_EMAIL || envValue("EMAIL_USER"));
     if (!adminEmail) return { sent: false, reason: "Admin notification email is not configured" };
 
     const studentName = getStudentName(leave);
@@ -684,21 +866,16 @@ async function sendAdminLeaveNotification(leave, adminPanelUrl) {
         `
     });
 
-    await transporter.sendMail({
+    return sendEmail({
         from: getEmailFromAddress(),
         to: adminEmail,
         subject: `New Leave Application - ${studentName}`,
         text: `New Leave Application\n\nName: ${studentName}\nEmployee ID: ${leave.employeeId}\nBatch: ${leave.team}\nEmail: ${leave.email}\nLeave dates: ${startDate} to ${endDate}\nReason: ${leave.reason}\n\nOpen Admin Panel: ${adminPanelUrl}\n\nRegards,\n${hrName}\n${hrDepartment}\n${companyName}`,
         html
     });
-
-    return { sent: true };
 }
 
 async function sendStatusEmail(leave, status) {
-    const transporter = getTransporter();
-    if (!transporter) return { sent: false, reason: "Email is not configured" };
-
     const approved = status === "Approved";
     const title = approved ? "Leave Approved" : "Leave Rejected";
     const color = approved ? "green" : "red";
@@ -720,7 +897,7 @@ async function sendStatusEmail(leave, status) {
         `
     });
 
-    await transporter.sendMail({
+    return sendEmail({
         from: getEmailFromAddress(),
         to: {
             name: studentName,
@@ -730,8 +907,6 @@ async function sendStatusEmail(leave, status) {
         text: `${title}\n\nDear ${studentName},\n\n${studentName}, ${bodyText}\nLeave dates: ${startDate} to ${endDate}\n\nRegards,\n${hrName}\n${hrDepartment}\n${companyName}`,
         html
     });
-
-    return { sent: true };
 }
 
 function formatDateTimeForDb(date) {
@@ -857,6 +1032,51 @@ async function deliverEmailJob(type, payload) {
 /* ===== HEALTH ===== */
 app.get("/health", (req, res) => {
     res.json({ success: true, message: "OK" });
+});
+
+/* ===== EMAIL JOB DIAGNOSTICS ===== */
+app.get("/email-jobs", requireAdmin, async (req, res) => {
+    try {
+        const [jobs] = await db.execute(`
+            SELECT id, type, status, attempts, runAt, lastError, createdAt, updatedAt
+            FROM email_jobs
+            ORDER BY id DESC
+            LIMIT 20
+        `);
+
+        res.json({
+            success: true,
+            configuration: getEmailConfigurationSummary(),
+            jobs
+        });
+    } catch (err) {
+        console.log("Email jobs DB error:", err.message);
+        res.status(500).json({
+            success: false,
+            message: "Email status load nahi hua"
+        });
+    }
+});
+
+app.post("/email-jobs/retry-failed", requireAdmin, async (req, res) => {
+    try {
+        const [result] = await db.execute(
+            "UPDATE email_jobs SET status='Pending', runAt=NOW(), lastError=NULL WHERE status='Failed'"
+        );
+
+        runEmailWorker();
+
+        res.json({
+            success: true,
+            message: `${result.affectedRows} failed email job(s) retry ke liye queued.`
+        });
+    } catch (err) {
+        console.log("Email retry DB error:", err.message);
+        res.status(500).json({
+            success: false,
+            message: "Failed emails retry nahi huye"
+        });
+    }
 });
 
 /* ===== LOGIN ===== */
@@ -1039,7 +1259,7 @@ async function startServer() {
         console.log("MySQL Connected");
         await initializeDatabase();
 
-        if (!process.env.TOKEN_SECRET) {
+        if (!envValue("TOKEN_SECRET")) {
             console.log("TOKEN_SECRET is not set. Set it in Railway for stable secure admin sessions.");
         }
 
