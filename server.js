@@ -15,14 +15,36 @@ const TOKEN_SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS) || 8 * 60 * 60 * 1000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const DEFAULT_APP_URL = "https://leaves-management-system8-production.up.railway.app";
+const DEFAULT_ADMIN_PANEL_URL = `${DEFAULT_APP_URL}/admin.html`;
 const DEFAULT_COMPANY_LOGO_URL = "https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800";
 const LEAVE_RETENTION_DAYS = Math.max(1, Number.parseInt(process.env.LEAVE_RETENTION_DAYS || "7", 10) || 7);
 const LEAVE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const EMAIL_SEND_DELAY_MS = 2 * 60 * 1000;
-const EMAIL_JOB_POLL_INTERVAL_MS = 30 * 1000;
-const EMAIL_JOB_RETRY_DELAY_MS = 5 * 60 * 1000;
+const EMAIL_ADMIN_NOTIFICATION_DELAY_MS = Math.max(0, envDurationMs(0, [
+    "EMAIL_ADMIN_NOTIFICATION_DELAY_MS",
+    "EMAIL_ADMIN_NOTIFICATION_DELAY_SECONDS",
+    "EMAIL_SEND_DELAY_MS",
+    "EMAIL_SEND_DELAY_SECONDS"
+]));
+const EMAIL_STATUS_EMAIL_DELAY_MS = Math.max(0, envDurationMs(0, [
+    "EMAIL_STATUS_EMAIL_DELAY_MS",
+    "EMAIL_STATUS_EMAIL_DELAY_SECONDS",
+    "EMAIL_SEND_DELAY_MS",
+    "EMAIL_SEND_DELAY_SECONDS"
+]));
+const EMAIL_JOB_POLL_INTERVAL_MS = Math.max(1000, envDurationMs(5000, [
+    "EMAIL_JOB_POLL_INTERVAL_MS",
+    "EMAIL_JOB_POLL_INTERVAL_SECONDS"
+]));
+const EMAIL_JOB_RETRY_DELAY_MS = Math.max(5000, envDurationMs(60000, [
+    "EMAIL_JOB_RETRY_DELAY_MS",
+    "EMAIL_JOB_RETRY_DELAY_SECONDS"
+]));
 const EMAIL_JOB_MAX_ATTEMPTS = 3;
-const EMAIL_SEND_TIMEOUT_MS = Math.max(5000, Number.parseInt(process.env.EMAIL_SEND_TIMEOUT_MS || "20000", 10) || 20000);
+const EMAIL_SEND_TIMEOUT_MS = Math.max(5000, envDurationMs(20000, [
+    "EMAIL_SEND_TIMEOUT_MS",
+    "EMAIL_SEND_TIMEOUT_SECONDS"
+]));
 const ALLOWED_EMAIL_DOMAINS = ["gmail.com", "outlook.com", "yahoo.com"];
 
 app.disable("x-powered-by");
@@ -74,6 +96,20 @@ function envValue(...names) {
     }
 
     return "";
+}
+
+function envDurationMs(defaultMs, names) {
+    for (const name of names) {
+        const rawValue = process.env[name];
+        if (!rawValue) continue;
+
+        const parsed = Number.parseFloat(rawValue);
+        if (!Number.isFinite(parsed)) continue;
+
+        return Math.round(name.endsWith("_SECONDS") ? parsed * 1000 : parsed);
+    }
+
+    return defaultMs;
 }
 
 function createDatabasePool() {
@@ -319,11 +355,24 @@ function normalizeEmail(email) {
     return String(email || "").trim().toLowerCase();
 }
 
+function getEmailPassword(emailUser, rawEmailPass) {
+    const service = String(process.env.EMAIL_SERVICE || "").trim().toLowerCase();
+    const isGmailAccount = service === "gmail" || normalizeEmail(emailUser).endsWith("@gmail.com");
+
+    if (isGmailAccount) {
+        return String(rawEmailPass || "").replace(/\s+/g, "");
+    }
+
+    return rawEmailPass;
+}
+
 function getTransporter() {
     const emailUser = envValue("EMAIL_USER", "SMTP_USER", "MAIL_USER");
-    const emailPass = envValue("EMAIL_PASS", "SMTP_PASS", "MAIL_PASS");
+    const rawEmailPass = envValue("EMAIL_PASS", "SMTP_PASS", "MAIL_PASS");
 
-    if (!emailUser || !emailPass) return null;
+    if (!emailUser || !rawEmailPass) return null;
+
+    const emailPass = getEmailPassword(emailUser, rawEmailPass);
 
     const commonOptions = {
         auth: {
@@ -519,19 +568,53 @@ function formatMailDate(value) {
     return text;
 }
 
-function getAppBaseUrl(req) {
-    const configuredUrl = String(process.env.APP_URL || process.env.PUBLIC_URL || "").trim();
-    if (configuredUrl) return configuredUrl.replace(/\/+$/, "");
+function normalizePublicUrl(value) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
 
-    const protocol = req.get("x-forwarded-proto") || req.protocol || "http";
-    return `${protocol}://${req.get("host")}`;
+    const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed)
+        ? trimmed
+        : `https://${trimmed.replace(/^\/+/, "")}`;
+
+    return withProtocol.replace(/\/+$/, "");
+}
+
+function getUrlHost(value) {
+    try {
+        return new URL(value).host.toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
+function getRequestBaseUrl(req) {
+    const host = String(req.get("host") || "").trim();
+    if (!host) return "";
+
+    const protocol = String(req.get("x-forwarded-proto") || req.protocol || "http").split(",")[0].trim();
+    return normalizePublicUrl(`${protocol}://${host}`);
+}
+
+function getAppBaseUrl(req) {
+    const configuredUrl = normalizePublicUrl(process.env.APP_URL || process.env.PUBLIC_URL);
+    if (configuredUrl) return configuredUrl;
+
+    return getRequestBaseUrl(req) || DEFAULT_APP_URL;
 }
 
 function getAdminPanelUrl(req) {
-    const configuredUrl = String(process.env.ADMIN_PANEL_URL || "").trim();
+    const configuredUrl = normalizePublicUrl(process.env.ADMIN_PANEL_URL);
+    const requestBaseUrl = getRequestBaseUrl(req);
+    const requestAdminUrl = requestBaseUrl ? `${requestBaseUrl}/admin.html` : "";
+
+    if (configuredUrl && requestAdminUrl && getUrlHost(configuredUrl) === getUrlHost(requestAdminUrl)) {
+        return configuredUrl;
+    }
+
+    if (requestAdminUrl) return requestAdminUrl;
     if (configuredUrl) return configuredUrl;
 
-    return `${getAppBaseUrl(req)}/admin.html`;
+    return DEFAULT_ADMIN_PANEL_URL;
 }
 
 function getMailBranding() {
@@ -665,8 +748,9 @@ function formatDateTimeForDb(date) {
     ].join(":");
 }
 
-async function enqueueEmailJob(type, payload) {
-    const runAt = new Date(Date.now() + EMAIL_SEND_DELAY_MS);
+async function enqueueEmailJob(type, payload, delayMs = 0) {
+    const safeDelayMs = Math.max(0, Number(delayMs) || 0);
+    const runAt = new Date(Date.now() + safeDelayMs);
 
     await db.execute(
         `
@@ -677,6 +761,8 @@ async function enqueueEmailJob(type, payload) {
     );
 
     scheduleEmailJobWake(runAt);
+    if (safeDelayMs === 0) runEmailWorker();
+
     return runAt;
 }
 
@@ -866,14 +952,14 @@ app.post("/apply-leave", async (req, res) => {
             await enqueueEmailJob("adminLeaveNotification", {
                 leave: savedLeave,
                 adminPanelUrl: getAdminPanelUrl(req)
-            });
+            }, EMAIL_ADMIN_NOTIFICATION_DELAY_MS);
         } catch (queueErr) {
             notificationQueued = false;
             console.log("Admin notification queue error:", queueErr.message);
         }
 
         res.send(notificationQueued
-            ? "Leave Applied Successfully. Email will be sent in 2 minutes."
+            ? "Leave Applied Successfully. Admin notification email is being sent."
             : "Leave Applied Successfully, but email scheduling failed.");
     } catch (err) {
         console.log("Leave apply DB error:", err.message);
@@ -924,11 +1010,11 @@ async function updateLeaveStatus(req, res, status) {
             await enqueueEmailJob("statusEmail", {
                 leave,
                 status
-            });
+            }, EMAIL_STATUS_EMAIL_DELAY_MS);
 
             res.json({
                 success: true,
-                message: `${status}. Email will be sent in 2 minutes.`
+                message: `${status}. Email is being sent.`
             });
         } catch (emailErr) {
             console.log(`${status} email queue error:`, emailErr.message);

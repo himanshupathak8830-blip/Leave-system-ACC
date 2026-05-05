@@ -19,8 +19,8 @@ In the Railway app service Variables tab, add:
 ADMIN_EMAIL=himanshu.data.acc@gmail.com
 ADMIN_PASSWORD=use-a-strong-admin-password
 TOKEN_SECRET=use-a-long-random-secret
-APP_URL=https://your-app.up.railway.app
-ADMIN_PANEL_URL=https://your-app.up.railway.app/admin.html
+APP_URL=https://leaves-management-system8-production.up.railway.app
+ADMIN_PANEL_URL=https://leaves-management-system8-production.up.railway.app/admin.html
 ```
 
 Generate a token secret locally with:
@@ -56,7 +56,7 @@ For leave submission and approval/rejection notification emails, add:
 ```env
 EMAIL_SERVICE=gmail
 EMAIL_USER=your_email@gmail.com
-EMAIL_PASS=your_gmail_app_password
+EMAIL_PASS=your_gmail_app_password_without_spaces
 EMAIL_FROM=your_email@gmail.com
 LEAVE_NOTIFICATION_EMAIL=your_admin_notification_email@gmail.com
 HR_NAME=Faizah Waseem
@@ -64,9 +64,12 @@ HR_DEPARTMENT=HR Department
 COMPANY_NAME=Analytics Career Connect
 COMPANY_LOGO_URL=https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&sz=w800
 EMAIL_SEND_TIMEOUT_MS=20000
+EMAIL_SEND_DELAY_MS=0
+EMAIL_JOB_POLL_INTERVAL_MS=5000
+EMAIL_JOB_RETRY_DELAY_MS=60000
 ```
 
-For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. Notification emails are queued and sent 2 minutes after each leave submission, approval, or rejection.
+For Gmail, `EMAIL_PASS` must be a Gmail App Password, not your normal Gmail login password. Keep `EMAIL_SEND_DELAY_MS=0` for near-immediate leave submission and approval/rejection emails.
 
 ## 5. Deploy
 
