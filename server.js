@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
-const mysql = require("mysql2/promise");
+const { Pool } = require("pg");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
 
@@ -60,7 +60,23 @@ app.use(express.json({ limit: "20kb" }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
+app.use(async (req, res, next) => {
+    try {
+        await ensureDatabaseReady();
+        if (isServerlessRuntime()) runEmailWorker();
+        next();
+    } catch (err) {
+        console.log("Database startup error:", err.message);
+        res.status(500).json({
+            success: false,
+            message: "Database connection failed"
+        });
+    }
+});
+
 let db;
+let dbReadyPromise = null;
+let backgroundJobsStarted = false;
 const loginAttempts = new Map();
 
 function loadLocalEnv() {
@@ -126,77 +142,172 @@ function envDurationMs(defaultMs, names) {
     return defaultMs;
 }
 
-function createDatabasePool() {
-    const databaseUrl = envValue("MYSQL_URL", "DATABASE_URL");
+const PG_COLUMN_REMAP = {
+    employeeid: "employeeId",
+    startdate: "startDate",
+    enddate: "endDate",
+    createdat: "createdAt",
+    updatedat: "updatedAt",
+    runat: "runAt",
+    lasterror: "lastError"
+};
 
-
-    if (databaseUrl) {
-        return mysql.createPool(databaseUrl);
+function pgRemapRow(row) {
+    if (!row) return row;
+    const mapped = {};
+    for (const [key, value] of Object.entries(row)) {
+        mapped[PG_COLUMN_REMAP[key] || key] = value;
     }
+    return mapped;
+}
 
-    const host = envValue("MYSQLHOST", "MYSQL_HOST", "DB_HOST") || "localhost";
-    const usingRailway = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+function createDatabasePool() {
+    const databaseUrl = envValue("DATABASE_URL", "SUPABASE_DB_URL", "POSTGRES_URL");
 
-    if (usingRailway && ["localhost", "127.0.0.1", "::1"].includes(host)) {
+    if (!databaseUrl) {
         throw new Error(
-            "Railway MySQL is not configured. Add MYSQL_URL=${{ MySQL.MYSQL_URL }} to the app service Variables tab, remove localhost MySQL variables, then redeploy."
+            "DATABASE_URL is not set. Add your Supabase PostgreSQL connection string in environment variables."
         );
     }
 
-    return mysql.createPool({
-        host,
-        user: envValue("MYSQLUSER", "MYSQL_USER", "DB_USER") || "root",
-        password: envValue("MYSQLPASSWORD", "MYSQL_PASSWORD", "DB_PASSWORD"),
-        database: envValue("MYSQLDATABASE", "MYSQL_DATABASE", "DB_NAME") || "leaveDB",
-        port: Number(envValue("MYSQLPORT", "MYSQL_PORT", "DB_PORT")) || 3306,
-        waitForConnections: true,
-        connectionLimit: 10
+    const pool = new Pool({
+        connectionString: databaseUrl,
+        max: isServerlessRuntime() ? 2 : 10,
+        ssl: { rejectUnauthorized: false }
     });
+
+    return {
+        async query(sql, params) {
+            return pool.query(sql, params);
+        },
+        async execute(sql, params = []) {
+            let idx = 0;
+            const pgSql = sql.replace(/\?/g, () => `$${++idx}`);
+            const result = await pool.query(pgSql, params);
+
+            if (/^\s*SELECT/i.test(pgSql)) {
+                return [result.rows.map(pgRemapRow), result.fields];
+            }
+
+            return [{
+                affectedRows: result.rowCount,
+                insertId: result.rows?.[0]?.id ?? null
+            }, result.fields];
+        }
+    };
+}
+
+function isTruthyEnv(value) {
+    return ["1", "true", "yes", "y", "required", "require", "on"].includes(
+        String(value || "").trim().toLowerCase()
+    );
+}
+
+function isServerlessRuntime() {
+    return Boolean(process.env.VERCEL);
+}
+
+async function ensureDatabaseReady() {
+    if (db) return db;
+
+    if (!dbReadyPromise) {
+        dbReadyPromise = initializeDatabaseConnection().catch((err) => {
+            db = null;
+            dbReadyPromise = null;
+            throw err;
+        });
+    }
+
+    return dbReadyPromise;
+}
+
+async function initializeDatabaseConnection() {
+    db = createDatabasePool();
+    await db.query("SELECT 1");
+    console.log("Supabase PostgreSQL Connected");
+    await initializeDatabase();
+
+    if (!envValue("TOKEN_SECRET")) {
+        console.log("TOKEN_SECRET is not set. Set it in deploy variables for stable secure admin sessions.");
+    }
+
+    return db;
 }
 
 
 
 async function initializeDatabase() {
-    await db.execute(`
+    await db.query(`
         CREATE TABLE IF NOT EXISTS admin (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             email VARCHAR(100) NOT NULL UNIQUE,
             password VARCHAR(255) NOT NULL
         )
     `);
 
-    await db.execute(`
+    await db.query(`
         CREATE TABLE IF NOT EXISTS leaves (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             name VARCHAR(100),
-            employeeId VARCHAR(50),
-            startDate DATE,
-            endDate DATE,
+            employeeid VARCHAR(50),
+            startdate DATE,
+            enddate DATE,
             team VARCHAR(50),
             reason TEXT,
             email VARCHAR(100),
             status VARCHAR(20) DEFAULT 'Pending',
-            createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            createdat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
-    await db.execute(`
+    await db.query(`
         CREATE TABLE IF NOT EXISTS email_jobs (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             type VARCHAR(50) NOT NULL,
-            payload LONGTEXT NOT NULL,
+            payload TEXT NOT NULL,
             status VARCHAR(20) NOT NULL DEFAULT 'Pending',
             attempts INT NOT NULL DEFAULT 0,
-            runAt DATETIME NOT NULL,
-            lastError TEXT NULL,
-            createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX status_run_idx (status, runAt)
+            runat TIMESTAMP NOT NULL,
+            lasterror TEXT NULL,
+            createdat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updatedat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
-    await db.execute("ALTER TABLE admin MODIFY password VARCHAR(255) NOT NULL");
-    await db.execute("ALTER TABLE leaves MODIFY status VARCHAR(20) DEFAULT 'Pending'");
+    await db.query("CREATE INDEX IF NOT EXISTS status_run_idx ON email_jobs (status, runat)");
+
+    await db.query(`
+        CREATE OR REPLACE FUNCTION update_updatedat_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updatedat = CURRENT_TIMESTAMP;
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql'
+    `);
+
+    await db.query(`
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_trigger WHERE tgname = 'update_email_jobs_updatedat'
+            ) THEN
+                CREATE TRIGGER update_email_jobs_updatedat
+                BEFORE UPDATE ON email_jobs
+                FOR EACH ROW
+                EXECUTE FUNCTION update_updatedat_column();
+            END IF;
+        END $$
+    `);
+
+    try {
+        await db.query("ALTER TABLE admin ALTER COLUMN password TYPE VARCHAR(255)");
+    } catch (e) { /* column already correct */ }
+
+    try {
+        await db.query("ALTER TABLE leaves ALTER COLUMN status TYPE VARCHAR(20)");
+        await db.query("ALTER TABLE leaves ALTER COLUMN status SET DEFAULT 'Pending'");
+    } catch (e) { /* column already correct */ }
+
     await ensureLeaveCreatedAtColumn();
     await removeLegacyEmailVerificationTable();
     await cleanupExpiredLeaves();
@@ -205,45 +316,47 @@ async function initializeDatabase() {
 }
 
 async function ensureLeaveCreatedAtColumn() {
-    const [columns] = await db.execute("SHOW COLUMNS FROM leaves LIKE 'createdAt'");
-    if (columns.length) return;
+    const result = await db.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='leaves' AND column_name='createdat'"
+    );
+    if (result.rows.length) return;
 
-    await db.execute("ALTER TABLE leaves ADD COLUMN createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+    await db.query("ALTER TABLE leaves ADD COLUMN createdat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
 }
 
 async function cleanupExpiredLeaves() {
-    const [result] = await db.execute(
-        `DELETE FROM leaves WHERE createdAt < DATE_SUB(NOW(), INTERVAL ${LEAVE_RETENTION_DAYS} DAY)`
+    const result = await db.query(
+        `DELETE FROM leaves WHERE createdat < NOW() - INTERVAL '${LEAVE_RETENTION_DAYS} days'`
     );
 
-    if (result.affectedRows > 0) {
-        console.log(`Removed ${result.affectedRows} leave requests older than ${LEAVE_RETENTION_DAYS} days.`);
+    if (result.rowCount > 0) {
+        console.log(`Removed ${result.rowCount} leave requests older than ${LEAVE_RETENTION_DAYS} days.`);
     }
 }
 
 async function removeLegacyEmailVerificationTable() {
     try {
-        await db.execute("DROP TABLE IF EXISTS email_verifications");
+        await db.query("DROP TABLE IF EXISTS email_verifications");
     } catch (err) {
         console.log("Legacy email verification table cleanup skipped:", err.message);
     }
 }
 
 async function cleanupOldEmailJobs() {
-    await db.execute(`
+    await db.query(`
         DELETE FROM email_jobs
         WHERE status IN ('Sent', 'Failed')
-          AND updatedAt < DATE_SUB(NOW(), INTERVAL 14 DAY)
+          AND updatedat < NOW() - INTERVAL '14 days'
     `);
 }
 
 async function createDefaultAdmin() {
-    const [rows] = await db.execute("SELECT COUNT(*) AS total FROM admin");
+    const countResult = await db.query("SELECT COUNT(*) AS total FROM admin");
 
-    if (rows[0].total > 0) return;
+    if (Number(countResult.rows[0].total) > 0) return;
 
     if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
-        console.log("No admin found. Set ADMIN_EMAIL and ADMIN_PASSWORD in Railway variables, then redeploy.");
+        console.log("No admin found. Set ADMIN_EMAIL and ADMIN_PASSWORD in Vercel environment variables, then redeploy.");
         return;
     }
 
@@ -666,7 +779,7 @@ function renderEmailPanel({ title, titleColor = "#111827", bodyHtml, footerHtml 
     <div style="margin:0;padding:16px;background:#f4f6f9">
         <div style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:8px;padding:16px 18px;font-family:Arial,sans-serif;color:#111827">
             <div style="text-align:center;margin:0 0 10px">
-                <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="display:block;width:240px;max-width:72%;height:auto;max-height:110px;object-fit:contain;margin:0 auto">
+                <img src="${escapeHtml(companyLogoUrl)}" alt="${escapeHtml(companyName)} logo" style="display:block;width:360px;max-width:80%;height:auto;max-height:165px;object-fit:contain;margin:0 auto">
             </div>
             <h2 style="margin:0 0 12px;color:${escapeHtml(titleColor)};font-size:22px;line-height:1.25">${escapeHtml(title)}</h2>
             <div style="font-size:15px;line-height:1.5">
@@ -862,7 +975,6 @@ async function sendAdminLeaveNotification(leave, adminPanelUrl) {
         <p style="margin:14px 0 8px">
             <a href="${escapeHtml(adminPanelUrl)}" style="display:inline-block;background:#111827;color:white;padding:12px 18px;border-radius:6px;text-decoration:none;font-weight:bold">Open Admin Panel</a>
         </p>
-        <p style="margin:0"><a href="${escapeHtml(adminPanelUrl)}">${escapeHtml(adminPanelUrl)}</a></p>
         `
     });
 
@@ -1149,6 +1261,7 @@ app.post("/apply-leave", async (req, res) => {
             `
             INSERT INTO leaves (name, employeeId, startDate, endDate, team, reason, email)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
             `,
             [
                 leave.name,
@@ -1256,7 +1369,7 @@ async function startServer() {
     try {
         db = createDatabasePool();
         await db.query("SELECT 1");
-        console.log("MySQL Connected");
+        console.log("Supabase PostgreSQL Connected");
         await initializeDatabase();
 
         if (!envValue("TOKEN_SECRET")) {
@@ -1286,4 +1399,8 @@ async function startServer() {
     }
 }
 
-startServer();
+if (isServerlessRuntime()) {
+    module.exports = app;
+} else {
+    startServer();
+}

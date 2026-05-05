@@ -25,14 +25,14 @@ body {
     width: 100%;
     max-width: 380px;
     background: #ff8c00;
-    padding: 30px;
+    padding: 18px 30px 26px;
     border-radius: 15px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
     color: white;
 }
 
 h2 {
-    margin: 0 0 20px;
+    margin: 0 0 16px;
     text-align: center;
     font-size: 26px;
 }
@@ -40,14 +40,14 @@ h2 {
 .logo-wrap {
     display: flex;
     justify-content: center;
-    margin-bottom: 10px;
+    margin: -6px 0 -2px;
 }
 
 .company-logo {
     display: block;
-    width: min(100%, 360px);
+    width: min(92%, 480px);
     height: auto;
-    max-height: 150px;
+    max-height: 177px;
     object-fit: contain;
 }
 
@@ -153,6 +153,22 @@ button:disabled {
     text-align: center;
     font-weight: 700;
 }
+
+.message.error,
+.message.success {
+    padding: 8px;
+    border-radius: 6px;
+}
+
+.message.error {
+    background: #fee2e2;
+    color: #7f1d1d;
+}
+
+.message.success {
+    background: #dcfce7;
+    color: #14532d;
+}
 </style>
 </head>
 
@@ -200,21 +216,13 @@ const studentEmail = document.getElementById("studentEmail");
 const emailStatus = document.getElementById("emailStatus");
 const ALLOWED_EMAIL_DOMAINS = ["gmail.com", "outlook.com", "yahoo.com"];
 
-employeeIdInput.addEventListener("input", syncEmployeeIdValidity);
-employeeIdInput.addEventListener("blur", () => {
+employeeIdInput.addEventListener("input", () => {
     syncEmployeeIdValidity();
-    if (employeeIdInput.value.trim() && employeeIdInput.validationMessage) {
-        alert(employeeIdInput.validationMessage);
-        employeeIdInput.focus();
-    }
+    clearFormErrorIfValid(employeeIdInput);
 });
 
 studentEmail.addEventListener("blur", () => {
     syncEmailValidity();
-    if (studentEmail.value.trim() && studentEmail.validationMessage) {
-        alert(studentEmail.validationMessage);
-        studentEmail.focus();
-    }
 });
 
 studentEmail.addEventListener("input", () => {
@@ -236,14 +244,16 @@ form.addEventListener("submit", async (event) => {
 
     syncEmployeeIdValidity();
     syncEmailValidity();
-    if (!form.checkValidity()) {
-        form.reportValidity();
+    const invalidField = getFirstInvalidField();
+    if (invalidField) {
+        setFormMessage(invalidField.validationMessage || "Please fill all fields.", "error");
+        invalidField.focus();
         return;
     }
 
     submitBtn.disabled = true;
     submitBtn.textContent = "Submitting...";
-    message.textContent = "";
+    setFormMessage("", "");
 
     try {
         const res = await fetch(API_BASE + "/apply-leave", {
@@ -255,17 +265,17 @@ form.addEventListener("submit", async (event) => {
         const text = await res.text();
 
         if (!res.ok) {
-            message.textContent = text || "Leave submit nahi hua. Server check karo.";
+            setFormMessage(text || "Leave submit nahi hua. Server check karo.", "error");
             return;
         }
 
-        message.textContent = text || "Leave Applied Successfully";
+        setFormMessage(text || "Leave Applied Successfully", "success");
         form.reset();
         syncEmployeeIdValidity();
         syncEmailValidity();
         setEmailStatus("", "");
     } catch (err) {
-        message.textContent = "Server connect nahi ho raha. http://localhost:3000 se page open karo.";
+        setFormMessage("Server connect nahi ho raha. http://localhost:3000 se page open karo.", "error");
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = "Apply Leave";
@@ -288,6 +298,23 @@ function syncEmailValidity() {
 function setEmailStatus(text, type) {
     emailStatus.textContent = text;
     emailStatus.className = type ? `email-status ${type}` : "email-status";
+}
+
+function setFormMessage(text, type) {
+    message.textContent = text;
+    message.className = type ? `message ${type}` : "message";
+}
+
+function clearFormErrorIfValid(field) {
+    if (message.classList.contains("error") && field.checkValidity()) {
+        setFormMessage("", "");
+    }
+}
+
+function getFirstInvalidField() {
+    return Array.from(form.elements).find((element) => (
+        element.willValidate && !element.checkValidity()
+    ));
 }
 
 function normalizeEmail(email) {
