@@ -26,7 +26,7 @@ body {
     width: 100%;
     max-width: 380px;
     background: #ff8c00;
-    padding: 18px 30px 26px;
+    padding: 30px;
     border-radius: 15px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
 }
@@ -44,23 +44,9 @@ body {
 }
 
 h2 {
-    margin: 0 0 16px;
+    margin: 0 0 20px;
     text-align: center;
     font-size: 26px;
-}
-
-.logo-wrap {
-    display: flex;
-    justify-content: center;
-    margin: -6px 0 -2px;
-}
-
-.company-logo {
-    display: block;
-    width: min(92%, 480px);
-    height: auto;
-    max-height: 177px;
-    object-fit: contain;
 }
 
 .topbar h2 {
@@ -176,38 +162,6 @@ th {
     font-size: 13px;
 }
 
-.section-title {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    margin: 22px 0 10px;
-}
-
-.section-title h3 {
-    margin: 0;
-    color: white;
-    font-size: 18px;
-}
-
-.email-summary {
-    margin: 0 0 10px;
-    min-height: 18px;
-    color: white;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.email-jobs-table {
-    min-width: 760px;
-}
-
-.error-cell {
-    max-width: 360px;
-    white-space: normal;
-    word-break: break-word;
-}
-
 .empty {
     text-align: center;
     color: #6b7280;
@@ -231,21 +185,15 @@ th {
     .top-actions {
         flex-direction: column;
     }
-
-    .section-title {
-        align-items: stretch;
-        flex-direction: column;
-    }
 }
 </style>
 </head>
 
 <body>
 <main id="container" class="container">
-    <div class="logo-wrap">
-        <img class="company-logo" src="https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&amp;sz=w800" alt="Analytics Career Connect logo">
+    <div style="text-align: center; margin-bottom: 20px;">
+        <img src="logo.png" alt="ACC Logo" style="max-width: 100%; height: auto; max-height: 80px; object-fit: contain;">
     </div>
-
     <section id="loginBox">
         <h2>Admin Login</h2>
 
@@ -289,31 +237,6 @@ th {
                 </tbody>
             </table>
         </div>
-
-        <div class="section-title">
-            <h3>Email Status</h3>
-            <button id="retryEmailJobsBtn" class="small-button" type="button">Retry Failed Emails</button>
-        </div>
-        <div id="emailSummary" class="email-summary"></div>
-        <div class="table-wrap">
-            <table class="email-jobs-table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Attempts</th>
-                        <th>Updated</th>
-                        <th>Last Error</th>
-                    </tr>
-                </thead>
-                <tbody id="emailJobRows">
-                    <tr>
-                        <td class="empty" colspan="6">Login to view email status.</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
     </section>
 </main>
 
@@ -330,21 +253,17 @@ const loginForm = document.getElementById("loginForm");
 const loginBtn = document.getElementById("loginBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 const logoutBtn = document.getElementById("logoutBtn");
-const retryEmailJobsBtn = document.getElementById("retryEmailJobsBtn");
 const leaveRows = document.getElementById("leaveRows");
-const emailJobRows = document.getElementById("emailJobRows");
-const emailSummary = document.getElementById("emailSummary");
 const loginMessage = document.getElementById("loginMessage");
 const panelMessage = document.getElementById("panelMessage");
 
 loginForm.addEventListener("submit", login);
-refreshBtn.addEventListener("click", loadDashboard);
-logoutBtn.addEventListener("click", () => logout());
-retryEmailJobsBtn.addEventListener("click", retryFailedEmails);
+refreshBtn.addEventListener("click", loadData);
+logoutBtn.addEventListener("click", logout);
 
 if (adminToken) {
     showPanel();
-    loadDashboard();
+    loadData();
 }
 
 async function login(event) {
@@ -374,18 +293,13 @@ async function login(event) {
         adminToken = data.token;
         localStorage.setItem("adminToken", adminToken);
         showPanel();
-        await loadDashboard();
+        await loadData();
     } catch (err) {
         loginMessage.textContent = "Server connect nahi ho raha. http://localhost:3000/admin.html se open karo.";
     } finally {
         loginBtn.disabled = false;
         loginBtn.textContent = "Login";
     }
-}
-
-async function loadDashboard() {
-    await loadData();
-    await loadEmailJobs();
 }
 
 async function loadData() {
@@ -423,7 +337,7 @@ async function loadData() {
                 <td>${escapeHtml(leave.employeeId)}</td>
                 <td>${formatDate(leave.startDate)}</td>
                 <td>${formatDate(leave.endDate)}</td>
-                <td>${escapeHtml(leave.team)}</td>
+                <td>${escapeHtml(leave.batch || leave.team)}</td>
                 <td>${escapeHtml(leave.reason)}</td>
                 <td>${escapeHtml(leave.email)}</td>
                 <td>${escapeHtml(leave.status || "Pending")}</td>
@@ -442,66 +356,6 @@ async function loadData() {
     }
 }
 
-async function loadEmailJobs() {
-    if (!loggedIn || !adminToken) return;
-
-    emailJobRows.innerHTML = '<tr><td class="empty" colspan="6">Loading email status...</td></tr>';
-
-    try {
-        const res = await fetch(API_BASE + "/email-jobs", {
-            headers: authHeaders()
-        });
-
-        if (res.status === 401) {
-            logout("Session expired. Please login again.");
-            return;
-        }
-
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-            emailJobRows.innerHTML = '<tr><td class="empty" colspan="6">Email status load nahi hua.</td></tr>';
-            return;
-        }
-
-        renderEmailSummary(data.configuration || {});
-
-        const jobs = data.jobs || [];
-        if (!jobs.length) {
-            emailJobRows.innerHTML = '<tr><td class="empty" colspan="6">No email jobs found yet.</td></tr>';
-            return;
-        }
-
-        emailJobRows.innerHTML = "";
-        jobs.forEach((job) => {
-            const row = document.createElement("tr");
-
-            row.innerHTML = `
-                <td>${escapeHtml(job.id)}</td>
-                <td>${escapeHtml(job.type)}</td>
-                <td>${escapeHtml(job.status)}</td>
-                <td>${escapeHtml(job.attempts)}</td>
-                <td>${formatDateTime(job.updatedAt || job.createdAt)}</td>
-                <td class="error-cell">${escapeHtml(job.lastError || "")}</td>
-            `;
-
-            emailJobRows.appendChild(row);
-        });
-    } catch (err) {
-        emailJobRows.innerHTML = '<tr><td class="empty" colspan="6">Email status load nahi hua. Server check karo.</td></tr>';
-    }
-}
-
-function renderEmailSummary(config) {
-    const provider = config.provider || "smtp";
-    const providerReady = provider === "resend"
-        ? config.resendConfigured
-        : provider === "sendgrid"
-            ? config.sendgridConfigured
-            : config.smtpConfigured;
-
-    emailSummary.textContent = `Provider: ${provider} | Ready: ${providerReady ? "yes" : "no"} | From: ${config.fromConfigured ? "yes" : "no"} | Admin email: ${config.notificationEmailConfigured ? "yes" : "no"}`;
-}
-
 async function approveLeave(id) {
     await updateLeaveStatus("/approve/" + id);
 }
@@ -513,48 +367,19 @@ async function rejectLeave(id) {
 async function updateLeaveStatus(path) {
     panelMessage.textContent = "Updating...";
 
-    try {
-        const res = await fetch(API_BASE + path, {
-            method: "PUT",
-            headers: authHeaders()
-        });
+    const res = await fetch(API_BASE + path, {
+        method: "PUT",
+        headers: authHeaders()
+    });
 
-        if (res.status === 401) {
-            logout("Session expired. Please login again.");
-            return;
-        }
-
-        const data = await res.json();
-        panelMessage.textContent = data.message || "Updated";
-        await loadDashboard();
-    } catch (err) {
-        panelMessage.textContent = "Update failed. Server check karo.";
+    if (res.status === 401) {
+        logout("Session expired. Please login again.");
+        return;
     }
-}
 
-async function retryFailedEmails() {
-    panelMessage.textContent = "Retrying failed emails...";
-    retryEmailJobsBtn.disabled = true;
-
-    try {
-        const res = await fetch(API_BASE + "/email-jobs/retry-failed", {
-            method: "POST",
-            headers: authHeaders()
-        });
-
-        if (res.status === 401) {
-            logout("Session expired. Please login again.");
-            return;
-        }
-
-        const data = await res.json();
-        panelMessage.textContent = data.message || "Retry queued.";
-        await loadEmailJobs();
-    } catch (err) {
-        panelMessage.textContent = "Email retry failed. Server check karo.";
-    } finally {
-        retryEmailJobsBtn.disabled = false;
-    }
+    const data = await res.json();
+    panelMessage.textContent = data.message || "Updated";
+    await loadData();
 }
 
 function authHeaders() {
@@ -578,8 +403,6 @@ function logout(message = "") {
     loginBox.classList.remove("hidden");
     container.classList.remove("wide");
     leaveRows.innerHTML = '<tr><td class="empty" colspan="9">Login to view leave requests.</td></tr>';
-    emailJobRows.innerHTML = '<tr><td class="empty" colspan="6">Login to view email status.</td></tr>';
-    emailSummary.textContent = "";
     panelMessage.textContent = "";
     loginMessage.textContent = message;
 }
@@ -589,21 +412,6 @@ function formatDate(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return escapeHtml(value);
     return date.toLocaleDateString();
-}
-
-function formatDateTime(value) {
-    if (!value) return "";
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return String(value);
-
-    return date.toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit"
-    });
 }
 
 function escapeHtml(value) {

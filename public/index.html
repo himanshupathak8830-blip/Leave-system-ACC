@@ -25,30 +25,16 @@ body {
     width: 100%;
     max-width: 380px;
     background: #ff8c00;
-    padding: 18px 30px 26px;
+    padding: 30px;
     border-radius: 15px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
     color: white;
 }
 
 h2 {
-    margin: 0 0 16px;
+    margin: 0 0 20px;
     text-align: center;
     font-size: 26px;
-}
-
-.logo-wrap {
-    display: flex;
-    justify-content: center;
-    margin: -6px 0 -2px;
-}
-
-.company-logo {
-    display: block;
-    width: min(92%, 480px);
-    height: auto;
-    max-height: 177px;
-    object-fit: contain;
 }
 
 label {
@@ -74,30 +60,11 @@ textarea {
     margin-bottom: 12px;
     border: none;
     outline: none;
-    color: #111827;
-    font-size: 16px;
 }
 
 textarea {
     min-height: 90px;
     resize: vertical;
-}
-
-select {
-    min-height: 44px;
-    background: white;
-    font-weight: 700;
-}
-
-select:invalid {
-    color: #6b7280;
-    font-weight: 600;
-}
-
-option {
-    color: #111827;
-    font-size: 16px;
-    font-weight: 700;
 }
 
 button {
@@ -119,70 +86,25 @@ button:disabled {
     cursor: not-allowed;
 }
 
-.email-status {
-    min-height: 18px;
-    margin: -4px 0 10px;
-    padding: 0;
-    border-radius: 6px;
-    text-align: center;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-.email-status.info {
-    padding: 6px;
-    background: #fef3c7;
-    color: #111827;
-}
-
-.email-status.success {
-    padding: 6px;
-    background: #dcfce7;
-    color: #14532d;
-}
-
-.email-status.error {
-    padding: 6px;
-    background: #fee2e2;
-    color: #7f1d1d;
-}
-
 .message {
     min-height: 20px;
     margin-top: 12px;
     text-align: center;
     font-weight: 700;
 }
-
-.message.error,
-.message.success {
-    padding: 8px;
-    border-radius: 6px;
-}
-
-.message.error {
-    background: #fee2e2;
-    color: #7f1d1d;
-}
-
-.message.success {
-    background: #dcfce7;
-    color: #14532d;
-}
 </style>
 </head>
 
 <body>
 <div class="container">
-    <div class="logo-wrap">
-        <img class="company-logo" src="https://drive.google.com/thumbnail?id=1oqFkpO8Hhv7IEYeKXWq19uubuKeFHCZ9&amp;sz=w800" alt="Analytics Career Connect logo">
+    <div style="text-align: center; margin-bottom: 20px;">
+        <img src="logo.png" alt="ACC Logo" style="max-width: 100%; height: auto; max-height: 80px; object-fit: contain;">
     </div>
-
     <h2>Apply Leave</h2>
 
-    <form id="form" novalidate>
+    <form id="form">
         <input name="name" placeholder="Full Name" required>
-        <input id="employeeId" name="employeeId" placeholder="Employee ID (ACC...)" pattern="^ACC.*" title="Employee ID must start with ACC" required>
+        <input name="employeeId" placeholder="Employee ID (e.g. ACC-FTDA-2026-034)" pattern="^ACC-[a-zA-Z]+-\d{4}-\d+$" title="Format must be ACC-xxxx-yyyy-123 (e.g. ACC-FTDA-2026-034)" required>
 
         <label for="startDate">Start Date</label>
         <input id="startDate" type="date" name="startDate" required>
@@ -190,16 +112,14 @@ button:disabled {
         <label for="endDate">End Date</label>
         <input id="endDate" type="date" name="endDate" required>
 
-        <label for="batch">Batch</label>
-        <select id="batch" name="team" required>
+        <select name="batch" required>
             <option value="">Select Batch</option>
-            <option value="Full Time">Full Time</option>
-            <option value="Part Time">Part Time</option>
+            <option>Part Time</option>
+            <option>Full Time</option>
         </select>
 
         <textarea name="reason" placeholder="Reason for leave" required></textarea>
-        <input id="studentEmail" type="email" name="email" placeholder="Email" inputmode="email" autocomplete="email" required>
-        <div id="emailStatus" class="email-status"></div>
+        <input type="email" name="email" placeholder="Email" required>
 
         <button id="submitBtn" type="submit">Apply Leave</button>
         <div id="message" class="message"></div>
@@ -211,49 +131,14 @@ const API_BASE = location.protocol === "file:" ? "http://localhost:3000" : "";
 const form = document.getElementById("form");
 const submitBtn = document.getElementById("submitBtn");
 const message = document.getElementById("message");
-const employeeIdInput = document.getElementById("employeeId");
-const studentEmail = document.getElementById("studentEmail");
-const emailStatus = document.getElementById("emailStatus");
-const ALLOWED_EMAIL_DOMAINS = ["gmail.com", "outlook.com", "yahoo.com"];
-
-employeeIdInput.addEventListener("input", () => {
-    syncEmployeeIdValidity();
-    clearFormErrorIfValid(employeeIdInput);
-});
-
-studentEmail.addEventListener("blur", () => {
-    syncEmailValidity();
-});
-
-studentEmail.addEventListener("input", () => {
-    syncEmailValidity();
-    if (!studentEmail.value.trim() || studentEmail.validationMessage) {
-        setEmailStatus("", "");
-        return;
-    }
-
-    setEmailStatus("Email format looks good.", "success");
-});
 
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const data = Object.fromEntries(new FormData(form));
-    data.employeeId = String(data.employeeId || "").trim();
-    data.email = normalizeEmail(data.email);
-
-    syncEmployeeIdValidity();
-    syncEmailValidity();
-    const invalidField = getFirstInvalidField();
-    if (invalidField) {
-        setFormMessage(invalidField.validationMessage || "Please fill all fields.", "error");
-        invalidField.focus();
-        return;
-    }
-
     submitBtn.disabled = true;
     submitBtn.textContent = "Submitting...";
-    setFormMessage("", "");
+    message.textContent = "";
 
     try {
         const res = await fetch(API_BASE + "/apply-leave", {
@@ -265,136 +150,19 @@ form.addEventListener("submit", async (event) => {
         const text = await res.text();
 
         if (!res.ok) {
-            setFormMessage(text || "Leave submit nahi hua. Server check karo.", "error");
+            message.textContent = text || "Leave submit nahi hua. Server check karo.";
             return;
         }
 
-        setFormMessage(text || "Leave Applied Successfully", "success");
+        message.textContent = text || "Leave Applied Successfully";
         form.reset();
-        syncEmployeeIdValidity();
-        syncEmailValidity();
-        setEmailStatus("", "");
     } catch (err) {
-        setFormMessage("Server connect nahi ho raha. http://localhost:3000 se page open karo.", "error");
+        message.textContent = "Server connect nahi ho raha. http://localhost:3000 se page open karo.";
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = "Apply Leave";
     }
 });
-
-function syncEmployeeIdValidity() {
-    employeeIdInput.setCustomValidity(getEmployeeIdError(employeeIdInput.value));
-}
-
-function syncEmailValidity() {
-    const emailError = getEmailError(studentEmail.value);
-    studentEmail.setCustomValidity(emailError);
-
-    if (emailError && studentEmail.value.trim()) {
-        setEmailStatus(emailError, "error");
-    }
-}
-
-function setEmailStatus(text, type) {
-    emailStatus.textContent = text;
-    emailStatus.className = type ? `email-status ${type}` : "email-status";
-}
-
-function setFormMessage(text, type) {
-    message.textContent = text;
-    message.className = type ? `message ${type}` : "message";
-}
-
-function clearFormErrorIfValid(field) {
-    if (message.classList.contains("error") && field.checkValidity()) {
-        setFormMessage("", "");
-    }
-}
-
-function getFirstInvalidField() {
-    return Array.from(form.elements).find((element) => (
-        element.willValidate && !element.checkValidity()
-    ));
-}
-
-function normalizeEmail(email) {
-    return String(email || "").trim().toLowerCase();
-}
-
-function getEmailError(email) {
-    const trimmedEmail = normalizeEmail(email);
-
-    if (!trimmedEmail) {
-        return "Please enter your email address.";
-    }
-
-    if (trimmedEmail.startsWith("@")) {
-        return "Email me @ se pehle name likho. Example: student@gmail.com";
-    }
-
-    if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmedEmail)) {
-        return "Please enter a valid email address. Example: student@gmail.com";
-    }
-
-    const [localPart, domain] = trimmedEmail.split("@");
-    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
-        const suggestedDomain = getClosestAllowedEmailDomain(domain);
-
-        if (suggestedDomain) {
-            return `Please check the email domain spelling. Did you mean ${localPart}@${suggestedDomain}?`;
-        }
-
-        return "Please use only @gmail.com, @outlook.com, or @yahoo.com email addresses.";
-    }
-
-    return "";
-}
-
-function getClosestAllowedEmailDomain(domain) {
-    const distances = ALLOWED_EMAIL_DOMAINS
-        .map((allowedDomain) => ({
-            domain: allowedDomain,
-            distance: getEditDistance(domain, allowedDomain)
-        }))
-        .sort((left, right) => left.distance - right.distance);
-
-    const bestMatch = distances[0];
-    return bestMatch && bestMatch.distance <= 2 ? bestMatch.domain : "";
-}
-
-function getEditDistance(left, right) {
-    const rows = Array.from({ length: left.length + 1 }, () => []);
-
-    for (let i = 0; i <= left.length; i += 1) rows[i][0] = i;
-    for (let j = 0; j <= right.length; j += 1) rows[0][j] = j;
-
-    for (let i = 1; i <= left.length; i += 1) {
-        for (let j = 1; j <= right.length; j += 1) {
-            const cost = left[i - 1] === right[j - 1] ? 0 : 1;
-            rows[i][j] = Math.min(
-                rows[i - 1][j] + 1,
-                rows[i][j - 1] + 1,
-                rows[i - 1][j - 1] + cost
-            );
-        }
-    }
-
-    return rows[left.length][right.length];
-}
-
-function getEmployeeIdError(employeeId) {
-    const trimmedEmployeeId = String(employeeId || "").trim();
-
-    if (!trimmedEmployeeId) {
-        return "Please enter your Employee ID.";
-    }
-
-    if (!trimmedEmployeeId.startsWith("ACC")) {
-        return "Employee ID must start with ACC.";
-    }
-
-    return "";
-}
 </script>
 </body>
 </html>
