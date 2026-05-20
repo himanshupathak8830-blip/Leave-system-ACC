@@ -375,34 +375,35 @@ app.post("/apply-leave", async (req, res) => {
         return res.status(400).send(error);
     }
 
-    if (isGoogleSheetsMode()) {
-        try {
-            const gasResult = await gasRequest({
-                action: "leave.create",
-                payload: {
-                    name: leave.name,
-                    employeeId: leave.employeeId,
-                    startDate: leave.startDate,
-                    endDate: leave.endDate,
-                    batch: leave.batch,
-                    reason: leave.reason,
-                    email: leave.email,
-                    status: "Pending"
-                }
-            });
+     if (isGoogleSheetsMode()) {
+         try {
+             const gasResult = await gasRequest({
+                 action: "write",
+                 sheet: "leaves",
+                 data: {
+                     name: leave.name,
+                     employeeId: leave.employeeId,
+                     startDate: leave.startDate,
+                     endDate: leave.endDate,
+                     batch: leave.batch,
+                     reason: leave.reason,
+                     email: leave.email,
+                     status: "Pending"
+                 }
+             });
 
-            try {
-                await sendApplicationEmail(leave);
-            } catch (emailErr) {
-                console.log("Application email error:", emailErr.message);
-            }
+             try {
+                 await sendApplicationEmail(leave);
+             } catch (emailErr) {
+                 console.log("Application email error:", emailErr.message);
+             }
 
-            return res.send(gasResult && gasResult.ok ? "Leave Applied Successfully" : "Storage Error");
-        } catch (err) {
-            console.error("Leave apply GAS error:", err.message);
-            return res.status(500).send("Storage Error");
-        }
-    }
+             return res.send(gasResult && gasResult.success ? "Leave Applied Successfully" : "Storage Error");
+         } catch (err) {
+             console.error("Leave apply GAS error:", err.message);
+             return res.status(500).send("Storage Error");
+         }
+     }
 
     res.status(500).send("Storage Error: No database configured");
 });
@@ -411,7 +412,7 @@ app.post("/apply-leave", async (req, res) => {
 app.get("/leaves", requireAdmin, async (req, res) => {
     try {
         if (isGoogleSheetsMode()) {
-            const response = await gasRequest({ action: "leaves" });
+            const response = await gasRequest({ action: "read", sheet: "leaves" });
             const rows = response.data || [];
             const sorted = rows.sort((a, b) => {
               // Convert ID to number for sorting
@@ -467,11 +468,13 @@ async function updateLeaveStatus(req, res, status) {
 
         if (isGoogleSheetsMode()) {
             const gasResult = await gasRequest({
-                action: "leave.status.update",
-                payload: { id, status }
+                action: "update",
+                sheet: "leaves",
+                id,
+                data: { status }
             });
 
-            if (!gasResult.ok) {
+            if (!gasResult.success) {
                 throw new Error(gasResult.error || "GAS update failed");
             }
         }
