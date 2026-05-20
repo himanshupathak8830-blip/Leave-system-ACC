@@ -57,7 +57,7 @@ The system is designed to use **Google Sheets** as the database. To complete the
 
 4. **Update `.env` file**:
    ```
-   GOOGLE_SCRIPT_URL=<your-deployment-url>
+   GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbznKWs4LkM4NnPfiPbsvIPLZBZVNrHyRMekGq5DDi4qPYO0ghPge5rwtRM651DslJM__g/exec
    ```
 
 ## 📋 File Structure
@@ -138,4 +138,3 @@ curl -X POST http://localhost:3000/login ...
 Your Leave Management System is **95% ready to go**! The only missing piece is connecting it to Google Sheets. The server, authentication, frontend, and all business logic are complete and working. 
 
 Follow the `GOOGLE_SHEETS_SETUP.md` guide to complete the integration in about 10-15 minutes.
-

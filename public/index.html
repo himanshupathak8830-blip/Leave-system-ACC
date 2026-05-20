@@ -114,8 +114,8 @@ button:disabled {
 
         <select name="batch" required>
             <option value="">Select Batch</option>
-            <option>Part Time</option>
             <option>Full Time</option>
+            <option>Part Time</option>
         </select>
 
         <textarea name="reason" placeholder="Reason for leave" required></textarea>
@@ -150,14 +150,14 @@ form.addEventListener("submit", async (event) => {
         const text = await res.text();
 
         if (!res.ok) {
-            message.textContent = text || "Leave submit nahi hua. Server check karo.";
+            message.textContent = text || "Leave ia not submitted start server";
             return;
         }
 
         message.textContent = text || "Leave Applied Successfully";
         form.reset();
     } catch (err) {
-        message.textContent = "Server connect nahi ho raha. http://localhost:3000 se page open karo.";
+        message.textContent = "Server is not start";
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = "Apply Leave";
