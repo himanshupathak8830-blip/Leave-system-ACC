@@ -11,7 +11,7 @@
 ## 🎯 What's Been Done
 
 ### ✅ 1. Google Apps Script URL Updated
-- **New URL:** `https://script.google.com/macros/s/AKfycby6LvQDZmbCBeYO5kkAxyjuk-CbK1HhfLnzkSoQqlzyG2NHXb8lofGWJgX0IjWjNvwu6Q/exec`
+- **New URL:** `https://script.google.com/macros/s/AKfycbzmOLvKdOhGJRkcAe_OAI-QWE5w40iZXW_E8oOEtzqXbq7TDD-W1dVFi0Yq3P2b7Q6XaQ/exec`
 - **Location:** `.env` file
 - **Status:** Updated & Ready
 
@@ -152,7 +152,7 @@ curl -X POST http://localhost:3000/apply-leave \
 ### .env File
 ```env
 PORT=3000
-GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycby6LvQDZmbCBeYO5kkAxyjuk-CbK1HhfLnzkSoQqlzyG2NHXb8lofGWJgX0IjWjNvwu6Q/exec
+GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbzmOLvKdOhGJRkcAe_OAI-QWE5w40iZXW_E8oOEtzqXbq7TDD-W1dVFi0Yq3P2b7Q6XaQ/exec
 ADMIN_EMAIL=himanshu.data.acc@gmail.com
 ADMIN_PASSWORD=1234
 TOKEN_SECRET=local-development-secret-change-before-public-deploy

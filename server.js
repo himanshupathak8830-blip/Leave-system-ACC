@@ -44,8 +44,8 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const TOKEN_SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
 const TOKEN_TTL_MS = Number(process.env.TOKEN_TTL_MS) || 8 * 60 * 60 * 1000;
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "himanshu.data.acc@gmail.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1234";
 
 app.disable("x-powered-by");
 
@@ -58,7 +58,11 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "20kb" }));
 app.use(cors());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 const loginAttempts = new Map();
 
@@ -188,7 +192,7 @@ function validateLeave(body) {
     };
 
     const missingField = Object.entries(leave).find(([, value]) => !value);
-    if (missingField) return { error: "Please fill all fields" };
+    if (missingField) return { error: `Please fill all fields (Missing: ${missingField[0]})` };
 
     if (!/^ACC-[A-Za-z]+-\d{4}-\d+$/.test(leave.employeeId)) {
         return { error: "Please enter a valid employee ID in the format ACC-xxxx-yyyy-123 (e.g. ACC-FTDA-2026-034)" };
@@ -323,24 +327,31 @@ app.post("/login", async (req, res) => {
 
     try {
         let admin;
-        if (isGoogleSheetsMode()) {
-            // In GAS mode, we don't have a separate admin sheet in the new 'leaves-only' script
-            // But if the user wants it, they should use the previous version of GAS script.
-            // For now, let's assume if it's leaves-only, we might use .env for admin or 
-            // a different action. The provided GAS script doesn't have admin.login.
-            
-            // IF the user wants admin from GAS, they need the 3-sheet version.
-            // Since they gave me a 'leaves-only' script, I'll fallback to .env for admin if GAS fails or is incomplete.
-            
-            if (email.toLowerCase() === (process.env.ADMIN_EMAIL || "").toLowerCase()) {
-                admin = { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD };
-            } else {
-                return res.status(401).json({ success: false, message: "Invalid admin email or password" });
+        
+        // 1. Direct login using your specified email and password
+        if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+            admin = { email: ADMIN_EMAIL, password: ADMIN_PASSWORD };
+        } 
+        // 2. Fallback to Google Sheets for any other admin emails
+        else if (isGoogleSheetsMode()) {
+            const response = await gasRequest({
+                action: "admin.login",
+                payload: { email }
+            });
+
+            if (!response.ok || !response.data) {
+                recordFailedLogin(loginKey);
+                return res.status(401).json({
+                    success: false,
+                    message: "Invalid admin email or password"
+                });
             }
+            admin = response.data;
         } else {
             // Legacy DB logic (if applicable) or return error
             return res.status(501).json({ success: false, message: "DB mode not fully implemented" });
         }
+        
         const validPassword = admin && verifyPassword(password, admin.password);
 
         if (!validPassword) {
@@ -359,10 +370,20 @@ app.post("/login", async (req, res) => {
             token: createToken(admin.email)
         });
     } catch (err) {
-        console.error("Login GAS error detailed:", err);
+        console.error("Login GAS error detailed:", err.message);
+        const errMsg = err.message || "";
+
+        if (errMsg.includes("not found") || errMsg.includes("No admins") || errMsg.includes("Columns")) {
+            recordFailedLogin(loginKey);
+            return res.status(401).json({
+                success: false,
+                message: errMsg.includes("email") ? "Invalid admin email or password" : `Sheet Setup Issue: ${errMsg}`
+            });
+        }
+
         res.status(500).json({
             success: false,
-            message: "Error during login"
+            message: `Error during login: ${errMsg}`
         });
     }
 });
@@ -375,35 +396,39 @@ app.post("/apply-leave", async (req, res) => {
         return res.status(400).send(error);
     }
 
-     if (isGoogleSheetsMode()) {
-         try {
-             const gasResult = await gasRequest({
-                 action: "write",
-                 sheet: "leaves",
-                 data: {
-                     name: leave.name,
-                     employeeId: leave.employeeId,
-                     startDate: leave.startDate,
-                     endDate: leave.endDate,
-                     batch: leave.batch,
-                     reason: leave.reason,
-                     email: leave.email,
-                     status: "Pending"
-                 }
-             });
+    if (isGoogleSheetsMode()) {
+        try {
+            const gasResult = await gasRequest({
+                action: "leave.create",
+                payload: {
+                    name: leave.name,
+                    employeeId: leave.employeeId,
+                    startDate: leave.startDate,
+                    endDate: leave.endDate,
+                    batch: leave.batch,
+                    reason: leave.reason,
+                    email: leave.email,
+                    status: "Pending"
+                }
+            });
 
-             try {
-                 await sendApplicationEmail(leave);
-             } catch (emailErr) {
-                 console.log("Application email error:", emailErr.message);
-             }
+            try {
+                await sendApplicationEmail(leave);
+            } catch (emailErr) {
+                console.log("Application email error:", emailErr.message);
+            }
 
-             return res.send(gasResult && gasResult.success ? "Leave Applied Successfully" : "Storage Error");
-         } catch (err) {
-             console.error("Leave apply GAS error:", err.message);
-             return res.status(500).send("Storage Error");
-         }
-     }
+                    if (gasResult && (gasResult.ok || gasResult.success)) {
+                        return res.send("Leave Applied Successfully");
+                    } else {
+                        console.error("GAS returned error:", gasResult.error);
+                        return res.status(500).send(`Storage Error: ${gasResult?.error || "Unknown GAS error"}`);
+                    }
+        } catch (err) {
+                    console.error("Leave apply GAS exception:", err.message);
+                    return res.status(500).send(`Storage Error: ${err.message}`);
+        }
+    }
 
     res.status(500).send("Storage Error: No database configured");
 });
@@ -412,7 +437,7 @@ app.post("/apply-leave", async (req, res) => {
 app.get("/leaves", requireAdmin, async (req, res) => {
     try {
         if (isGoogleSheetsMode()) {
-            const response = await gasRequest({ action: "read", sheet: "leaves" });
+            const response = await gasRequest({ action: "leaves" });
             const rows = response.data || [];
             const sorted = rows.sort((a, b) => {
               // Convert ID to number for sorting
@@ -455,9 +480,25 @@ async function updateLeaveStatus(req, res, status) {
     }
 
     try {
-        // First get current leaves to find the record
-        const leaves = await getLeaves();
-        const leave = leaves.find(l => l.id == id);
+        let leave = null;
+
+        if (isGoogleSheetsMode()) {
+            const response = await gasRequest({ action: "leaves" });
+            const rows = response.data || [];
+            const allLeaves = rows.map(row => ({
+                id: row.ID || row.id,
+                name: row.Name || row.name,
+                employeeId: row["Employee ID"] || row.employeeId,
+                startDate: row["Start Date"] || row.startDate,
+                endDate: row["End Date"] || row.endDate,
+                batch: row.Batch || row.batch,
+                reason: row.Reason || row.reason,
+                email: row.Email || row.email,
+                status: row.Status || row.status,
+                createdAt: row["Created At"] || row.createdAt
+            }));
+            leave = allLeaves.find(l => l.id == id);
+        }
 
         if (!leave) {
             return res.status(404).json({
@@ -468,13 +509,11 @@ async function updateLeaveStatus(req, res, status) {
 
         if (isGoogleSheetsMode()) {
             const gasResult = await gasRequest({
-                action: "update",
-                sheet: "leaves",
-                id,
-                data: { status }
+                action: "leave.status.update",
+                payload: { id, status }
             });
 
-            if (!gasResult.success) {
+                if (!gasResult.ok && !gasResult.success) {
                 throw new Error(gasResult.error || "GAS update failed");
             }
         }
@@ -498,7 +537,7 @@ async function updateLeaveStatus(req, res, status) {
         console.log(`${status} error:`, err.message);
         res.status(500).json({
             success: false,
-            message: "Storage error"
+                message: `Storage error: ${err.message}`
         });
     }
 }
@@ -523,3 +562,5 @@ async function startServer() {
 }
 
 startServer();
+
+module.exports = app;

@@ -35,7 +35,7 @@ Create a `.env` file based on `.env.example`:
 ```env
 PORT=3000
 TOKEN_SECRET=your_secret_key
-GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbznKWs4LkM4NnPfiPbsvIPLZBZVNrHyRMekGq5DDi4qPYO0ghPge5rwtRM651DslJM__g/exec
+GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbzmOLvKdOhGJRkcAe_OAI-QWE5w40iZXW_E8oOEtzqXbq7TDD-W1dVFi0Yq3P2b7Q6XaQ/exec
 
 # Email (Gmail recommended)
 EMAIL_USER=your-email@gmail.com

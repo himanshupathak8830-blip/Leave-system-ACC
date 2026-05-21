@@ -57,7 +57,7 @@ The system is designed to use **Google Sheets** as the database. To complete the
 
 4. **Update `.env` file**:
    ```
-   GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbznKWs4LkM4NnPfiPbsvIPLZBZVNrHyRMekGq5DDi4qPYO0ghPge5rwtRM651DslJM__g/exec
+   GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbzmOLvKdOhGJRkcAe_OAI-QWE5w40iZXW_E8oOEtzqXbq7TDD-W1dVFi0Yq3P2b7Q6XaQ/exec
    ```
 
 ## 📋 File Structure

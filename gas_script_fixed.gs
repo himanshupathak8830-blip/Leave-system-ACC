@@ -1,13 +1,13 @@
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
-      return jsonResponse({ ok: false, error: "No data received" });
+      return jsonResponse({ ok: false, error: "No data" });
     }
     const params = JSON.parse(e.postData.contents);
     const action = params.action;
     const payload = params.payload || {};
 
-    if (action === "health") return jsonResponse({ ok: true, message: "System is healthy" });
+    if (action === "health") return jsonResponse({ ok: true });
     if (action === "leave.create") return createLeave(payload);
     if (action === "leaves") return getLeaves();
     if (action === "leave.status.update") return updateLeaveStatus(payload);
@@ -15,8 +15,7 @@ function doPost(e) {
 
     return jsonResponse({ ok: false, error: "Unknown action: " + action });
   } catch (err) {
-    Logger.log("Error in doPost: " + err.toString() + "\nStack: " + err.stack);
-    return jsonResponse({ ok: false, error: "Script error: " + err.message });
+    return jsonResponse({ ok: false, error: err.toString() });
   }
 }
 
@@ -99,25 +98,25 @@ function updateLeaveStatus(payload) {
   const { id, status } = payload;
   const sheet = getLeavesSheet();
   const data = sheet.getDataRange().getValues();
-
+  
   if (data.length <= 1) return jsonResponse({ ok: false, error: "No leaves found" });
-
+  
   const headers = data[0].map(h => String(h).trim().toLowerCase());
   const idIndex = headers.indexOf("id");
   const statusIndex = headers.indexOf("status");
-
+  
   if (idIndex === -1 || statusIndex === -1) {
-    return jsonResponse({ ok: false, error: "Columns 'id' or 'status' missing in leaves sheet" });
+    return jsonResponse({ ok: false, error: "Columns 'ID' or 'Status' missing in sheet" });
   }
-
+  
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][idIndex]) == String(id)) {
+    if (String(data[i][idIndex]) === String(id)) {
       sheet.getRange(i + 1, statusIndex + 1).setValue(status);
-      return jsonResponse({ ok: true, message: "Status updated successfully" });
+      return jsonResponse({ ok: true, message: "Status updated" });
     }
   }
-
-  return jsonResponse({ ok: false, error: "Leave ID not found: " + id });
+  
+  return jsonResponse({ ok: false, error: "Leave ID not found" });
 }
 
 function getAdminByEmail(payload) {

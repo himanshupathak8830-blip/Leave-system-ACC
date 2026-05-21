@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/login \
 5. Copy code from `gas_script_fixed.gs`
 6. Deploy as "Web app" with "Who has access: Anyone"
 7. Copy deployment URL
-8. Update `.env`: `GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbznKWs4LkM4NnPfiPbsvIPLZBZVNrHyRMekGq5DDi4qPYO0ghPge5rwtRM651DslJM__g/exec`
+8. Update `.env`: `GOOGLE_SCRIPT_URL=https://script.google.com/macros/s/AKfycbzmOLvKdOhGJRkcAe_OAI-QWE5w40iZXW_E8oOEtzqXbq7TDD-W1dVFi0Yq3P2b7Q6XaQ/exec`
 9. Restart server
 
 See `GOOGLE_SHEETS_SETUP.md` for detailed steps.
