@@ -194,9 +194,6 @@ function validateLeave(body) {
     const missingField = Object.entries(leave).find(([, value]) => !value);
     if (missingField) return { error: `Please fill all fields (Missing: ${missingField[0]})` };
 
-    if (!/^ACC-[A-Za-z]+-\d{4}-\d+$/.test(leave.employeeId)) {
-        return { error: "Please enter a valid employee ID in the format ACC-xxxx-yyyy-123 (e.g. ACC-FTDA-2026-034)" };
-    }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leave.email)) {
         return { error: "Please enter a valid email" };
